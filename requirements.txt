@@ -207,3 +207,4 @@ yarl==1.20.1
 zstandard==0.25.0
     # via langsmith
 markdown==3.6
+langchain-groq
