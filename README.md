@@ -174,14 +174,4 @@ Lower hallucination risk due to RAG approach
 
 📷 Screenshots
 
-(Add screenshots here after running the project)
-
-Example sections to include:
-
-Home Page UI
-
-Sample Question Input
-
-Generated Research Response
-
-Terminal showing API running
+In screenshots folder
