@@ -68,12 +68,21 @@ http://127.0.0.1:5173
 6. Enable Google provider.
 7. Add your local domain, such as `localhost`, to authorized domains.
 
-The current FastAPI backend issues JWTs through `/login`. This frontend completes the Firebase Google sign-in flow and stores the Google profile client-side, then asks the user to create or link a normal platform account so the app can receive the existing backend JWT without changing backend APIs.
+The frontend completes the Firebase Google popup flow, retrieves the Firebase ID token, sends it to FastAPI `POST /google-login`, and stores the backend JWT returned by the API. Protected routes continue to use the platform JWT, not the Firebase client token.
+
+Backend Firebase Admin variables:
+
+```bash
+FIREBASE_PROJECT_ID=
+FIREBASE_PRIVATE_KEY=
+FIREBASE_CLIENT_EMAIL=
+```
 
 ## API Endpoints Used
 
 - `POST /signup`
 - `POST /login`
+- `POST /google-login`
 - `POST /logout`
 - `GET /me`
 - `GET /history`

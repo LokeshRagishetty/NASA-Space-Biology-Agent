@@ -28,6 +28,11 @@ export async function loginUser(payload) {
   return data
 }
 
+export async function googleLoginUser(idToken) {
+  const { data } = await api.post('/google-login', { id_token: idToken })
+  return data
+}
+
 export async function logoutUser() {
   const { data } = await api.post('/logout')
   return data

@@ -2,10 +2,35 @@ import { useState } from 'react'
 import { ChevronDown, LogOut, Settings, UserCircle } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 
+function renderAvatar(user, initial, size = 'h-9 w-9') {
+  if (user?.avatar_url) {
+    return (
+      <img
+        className={`${size} rounded-xl object-cover ring-1 ring-white/15`}
+        src={user.avatar_url}
+        alt={`${user.username} avatar`}
+        referrerPolicy="no-referrer"
+      />
+    )
+  }
+
+  return (
+    <span className={`flex ${size} items-center justify-center rounded-xl bg-gradient-to-br from-comet to-solar text-sm font-bold text-slate-950`}>
+      {initial}
+    </span>
+  )
+}
+
 export default function ProfileDropdown({ onSettings }) {
   const { user, logout } = useAuth()
   const [open, setOpen] = useState(false)
   const initial = user?.username?.slice(0, 1)?.toUpperCase() || 'A'
+  const providerLabel =
+    user?.auth_provider === 'password_google'
+      ? 'Email + Google'
+      : user?.auth_provider === 'google'
+        ? 'Google'
+        : 'Email'
 
   return (
     <div className="relative">
@@ -14,9 +39,7 @@ export default function ProfileDropdown({ onSettings }) {
         className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.06] px-3 py-2 transition hover:bg-white/[0.10] light:border-slate-200 light:bg-white"
         onClick={() => setOpen((value) => !value)}
       >
-        <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-comet to-solar text-sm font-bold text-slate-950">
-          {initial}
-        </span>
+        {renderAvatar(user, initial)}
         <span className="hidden min-w-0 text-left sm:block">
           <span className="block truncate text-sm font-semibold text-white light:text-slate-950">
             {user?.username}
@@ -31,13 +54,16 @@ export default function ProfileDropdown({ onSettings }) {
       {open && (
         <div className="glass-panel absolute right-0 mt-3 w-64 rounded-2xl p-2">
           <div className="border-b border-white/10 px-3 py-3 light:border-slate-200">
-            <div className="flex items-center gap-3">
-              <UserCircle className="h-8 w-8 text-comet" />
+              <div className="flex items-center gap-3">
+              {user?.avatar_url ? renderAvatar(user, initial, 'h-10 w-10') : <UserCircle className="h-8 w-8 text-comet" />}
               <div className="min-w-0">
                 <p className="truncate text-sm font-semibold text-white light:text-slate-950">
                   {user?.username}
                 </p>
                 <p className="truncate text-xs text-slate-400 light:text-slate-500">{user?.email}</p>
+                <span className="mt-2 inline-flex rounded-full border border-comet/25 bg-comet/10 px-2 py-0.5 text-[11px] font-semibold text-comet">
+                  {providerLabel}
+                </span>
               </div>
             </div>
           </div>

@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 
+from typing import Optional
+
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -17,6 +19,14 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(50), unique=True, index=True, nullable=False)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
+    google_id: Mapped[Optional[str]] = mapped_column(String(255), unique=True, index=True, nullable=True)
+    avatar_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    auth_provider: Mapped[str] = mapped_column(
+        String(30),
+        default="password",
+        server_default="password",
+        nullable=False,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
     chats: Mapped[list["ChatHistory"]] = relationship(

@@ -1,5 +1,6 @@
 import re
 from datetime import datetime
+from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -52,6 +53,9 @@ class UserProfile(BaseModel):
     id: int
     username: str
     email: str
+    google_id: Optional[str] = None
+    avatar_url: Optional[str] = None
+    auth_provider: str = "password"
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
@@ -62,6 +66,10 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     expires_in: int
     user: UserProfile
+
+
+class GoogleLoginRequest(BaseModel):
+    id_token: str = Field(..., min_length=20)
 
 
 class ChatRequest(BaseModel):

@@ -42,13 +42,8 @@ export default function LoginPage() {
     setGoogleLoading(true)
 
     try {
-      const profile = await loginWithGoogle()
-      navigate('/signup', {
-        state: {
-          googleProfile: profile,
-          message: 'Google verified. Create or link a platform account to receive your FastAPI JWT.',
-        },
-      })
+      await loginWithGoogle()
+      navigate('/app', { replace: true })
     } catch (err) {
       setError(err.message)
     } finally {

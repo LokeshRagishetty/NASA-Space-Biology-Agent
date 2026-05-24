@@ -1,8 +1,13 @@
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
+import json
 
 from dotenv import load_dotenv
+import firebase_admin
+from firebase_admin import auth as firebase_auth
+from firebase_admin import credentials
+from firebase_admin.exceptions import FirebaseError
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
@@ -31,6 +36,74 @@ def get_password_hash(password: str) -> str:
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
+
+
+def _firebase_certificate_from_env() -> credentials.Certificate:
+    service_account_path = os.getenv("FIREBASE_SERVICE_ACCOUNT_FILE") or os.getenv(
+        "GOOGLE_APPLICATION_CREDENTIALS"
+    )
+    if service_account_path:
+        return credentials.Certificate(service_account_path)
+
+    service_account_json = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
+    if service_account_json:
+        return credentials.Certificate(json.loads(service_account_json))
+
+    project_id = os.getenv("FIREBASE_PROJECT_ID")
+    private_key = os.getenv("FIREBASE_PRIVATE_KEY")
+    client_email = os.getenv("FIREBASE_CLIENT_EMAIL")
+
+    if not all([project_id, private_key, client_email]):
+        raise RuntimeError(
+            "Firebase Admin credentials are missing. Set FIREBASE_PROJECT_ID, "
+            "FIREBASE_PRIVATE_KEY, and FIREBASE_CLIENT_EMAIL."
+        )
+
+    return credentials.Certificate(
+        {
+            "type": "service_account",
+            "project_id": project_id,
+            "private_key": private_key.replace("\\n", "\n"),
+            "client_email": client_email,
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+            "client_x509_cert_url": (
+                "https://www.googleapis.com/robot/v1/metadata/x509/"
+                f"{client_email.replace('@', '%40')}"
+            ),
+        }
+    )
+
+
+def get_firebase_app() -> firebase_admin.App:
+    try:
+        return firebase_admin.get_app()
+    except ValueError:
+        cert = _firebase_certificate_from_env()
+        project_id = os.getenv("FIREBASE_PROJECT_ID")
+        options = {"projectId": project_id} if project_id else None
+        return firebase_admin.initialize_app(cert, options)
+
+
+def verify_firebase_id_token(id_token: str) -> dict[str, Any]:
+    try:
+        return firebase_auth.verify_id_token(
+            id_token,
+            app=get_firebase_app(),
+            check_revoked=True,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    except (ValueError, FirebaseError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid, expired, or revoked Firebase ID token.",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
 
 
 def authenticate_user(db: Session, username_or_email: str, password: str) -> Optional[User]:

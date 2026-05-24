@@ -107,6 +107,30 @@ Docker
 
 Environment Variables (.env)
 
+Google OAuth Backend Exchange
+
+The React frontend uses Firebase popup sign-in. After Firebase authenticates the
+Google user, the frontend sends the Firebase ID token to FastAPI:
+
+POST /google-login
+
+FastAPI verifies that token with Firebase Admin SDK, creates or links a local
+user, and returns the normal platform JWT used by protected routes.
+
+Required backend environment variables:
+
+FIREBASE_PROJECT_ID=
+FIREBASE_PRIVATE_KEY=
+FIREBASE_CLIENT_EMAIL=
+
+Alternative supported credential formats:
+
+FIREBASE_SERVICE_ACCOUNT_FILE=/secure/path/service-account.json
+FIREBASE_SERVICE_ACCOUNT_JSON={"type":"service_account",...}
+
+For multiline private keys stored in .env, keep newline escapes as \n. The
+backend converts them before initializing Firebase Admin.
+
 🔍 Data Sources
 1. NASA ADS
 

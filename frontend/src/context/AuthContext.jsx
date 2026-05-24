@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   getApiError,
   getCurrentUser,
+  googleLoginUser,
   loginUser,
   logoutUser,
   setAuthToken,
@@ -12,7 +13,6 @@ import { AuthContext } from './auth-context'
 
 const TOKEN_KEY = 'nasa_agent_token'
 const USER_KEY = 'nasa_agent_user'
-const GOOGLE_USER_KEY = 'nasa_agent_google_user'
 
 function readJson(key) {
   try {
@@ -23,19 +23,9 @@ function readJson(key) {
   }
 }
 
-function toGoogleProfile(firebaseUser) {
-  return {
-    uid: firebaseUser.uid,
-    name: firebaseUser.displayName,
-    email: firebaseUser.email,
-    avatar: firebaseUser.photoURL,
-  }
-}
-
 export function AuthProvider({ children }) {
   const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY))
   const [user, setUser] = useState(() => readJson(USER_KEY))
-  const [googleUser, setGoogleUser] = useState(() => readJson(GOOGLE_USER_KEY))
   const [booting, setBooting] = useState(true)
 
   const clearSession = useCallback(() => {
@@ -120,14 +110,14 @@ export function AuthProvider({ children }) {
   const loginWithGoogle = useCallback(async () => {
     try {
       const firebaseUser = await signInWithGooglePopup()
-      const profile = toGoogleProfile(firebaseUser)
-      setGoogleUser(profile)
-      localStorage.setItem(GOOGLE_USER_KEY, JSON.stringify(profile))
-      return profile
+      const idToken = await firebaseUser.getIdToken()
+      const payload = await googleLoginUser(idToken)
+      persistSession(payload)
+      return payload
     } catch (error) {
       throw new Error(error.message || 'Google sign-in failed.', { cause: error })
     }
-  }, [])
+  }, [persistSession])
 
   const logout = useCallback(async () => {
     try {
@@ -138,8 +128,6 @@ export function AuthProvider({ children }) {
       // Client-side token removal is still the important step for stateless JWT logout.
     } finally {
       await signOutFromFirebase().catch(() => {})
-      setGoogleUser(null)
-      localStorage.removeItem(GOOGLE_USER_KEY)
       clearSession()
     }
   }, [clearSession, token])
@@ -148,7 +136,6 @@ export function AuthProvider({ children }) {
     () => ({
       user,
       token,
-      googleUser,
       booting,
       isAuthenticated: Boolean(token && user),
       login,
@@ -156,7 +143,7 @@ export function AuthProvider({ children }) {
       loginWithGoogle,
       logout,
     }),
-    [booting, googleUser, login, loginWithGoogle, logout, signup, token, user],
+    [booting, login, loginWithGoogle, logout, signup, token, user],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

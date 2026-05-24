@@ -1,13 +1,16 @@
 # main.py
 import os
 import re
+import secrets
 from contextlib import asynccontextmanager
 from datetime import timedelta
+from typing import Optional
 
 import markdown
 import requests
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.staticfiles import StaticFiles
@@ -18,7 +21,8 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_groq import ChatGroq
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import inspect, text
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from auth import (
@@ -27,6 +31,7 @@ from auth import (
     create_access_token,
     get_current_user,
     get_password_hash,
+    verify_firebase_id_token,
 )
 from database import Base, engine, get_db
 from models import ChatHistory, User
@@ -34,6 +39,7 @@ from schemas import (
     ChatHistoryResponse,
     ChatRequest,
     ChatResponse,
+    GoogleLoginRequest,
     MessageResponse,
     TokenResponse,
     UserCreate,
@@ -48,10 +54,37 @@ assert os.getenv("GROQ_API_KEY"), "Missing GROQ_API_KEY in .env"
 assert os.getenv("NASA_ADS_TOKEN"), "Missing NASA_ADS_TOKEN in .env"
 
 
+def ensure_user_auth_columns() -> None:
+    """Lightweight SQLite-friendly migration for OAuth profile fields."""
+    inspector = inspect(engine)
+    if "users" not in inspector.get_table_names():
+        return
+
+    columns = {column["name"] for column in inspector.get_columns("users")}
+    statements = []
+
+    if "google_id" not in columns:
+        statements.append("ALTER TABLE users ADD COLUMN google_id VARCHAR(255)")
+    if "avatar_url" not in columns:
+        statements.append("ALTER TABLE users ADD COLUMN avatar_url VARCHAR(1024)")
+    if "auth_provider" not in columns:
+        statements.append(
+            "ALTER TABLE users ADD COLUMN auth_provider VARCHAR(30) NOT NULL DEFAULT 'password'"
+        )
+
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+        connection.execute(
+            text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_google_id ON users (google_id)")
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # For SQLite/simple deployments. Use Alembic migrations before a large production launch.
     Base.metadata.create_all(bind=engine)
+    ensure_user_auth_columns()
     yield
 
 
@@ -65,6 +98,22 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+allowed_origins = [
+    origin.strip()
+    for origin in os.getenv(
+        "FRONTEND_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174",
+    ).split(",")
+    if origin.strip()
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # In-memory LangChain session store. The session id now includes user id to avoid cross-user memory.
@@ -100,6 +149,93 @@ def authenticate_and_build_token(db: Session, username: str, password: str) -> T
             headers={"WWW-Authenticate": "Bearer"},
         )
     return build_token_response(user)
+
+
+def normalize_google_username(name: Optional[str], email: str) -> str:
+    raw_username = (name or email.split("@")[0]).strip().lower()
+    username = re.sub(r"[^a-z0-9_.-]+", ".", raw_username).strip("._-")
+    if len(username) < 3:
+        username = f"user.{username or 'google'}"
+    return username[:50]
+
+
+def get_unique_username(db: Session, base_username: str) -> str:
+    candidate = base_username
+    counter = 1
+
+    while db.query(User).filter(User.username == candidate).first():
+        suffix = f"-{counter}"
+        candidate = f"{base_username[: 50 - len(suffix)]}{suffix}"
+        counter += 1
+
+    return candidate
+
+
+def apply_google_profile(
+    user: User,
+    firebase_uid: str,
+    name: Optional[str],
+    picture: Optional[str],
+) -> None:
+    user.google_id = firebase_uid
+    user.avatar_url = picture or user.avatar_url
+
+    if user.auth_provider == "password":
+        user.auth_provider = "password_google"
+    elif not user.auth_provider:
+        user.auth_provider = "google"
+
+
+def get_or_create_google_user(db: Session, claims: dict) -> User:
+    firebase_uid = claims.get("uid") or claims.get("user_id") or claims.get("sub")
+    email = (claims.get("email") or "").strip().lower()
+    name = claims.get("name")
+    picture = claims.get("picture")
+    email_verified = claims.get("email_verified")
+
+    if not firebase_uid:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Firebase token is missing uid.")
+    if not email:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Google account has no email address.")
+    if email_verified is False:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Google email is not verified.")
+
+    user = db.query(User).filter(User.google_id == firebase_uid).first()
+    email_user = db.query(User).filter(User.email == email).first()
+
+    if user and email_user and user.id != email_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This Google account is already linked to another email.",
+        )
+
+    if user:
+        if user.email != email:
+            user.email = email
+        apply_google_profile(user, firebase_uid, name, picture)
+        db.commit()
+        db.refresh(user)
+        return user
+
+    if email_user:
+        apply_google_profile(email_user, firebase_uid, name, picture)
+        db.commit()
+        db.refresh(email_user)
+        return email_user
+
+    user = User(
+        username=get_unique_username(db, normalize_google_username(name, email)),
+        email=email,
+        hashed_password=get_password_hash(secrets.token_urlsafe(48)),
+        google_id=firebase_uid,
+        avatar_url=picture,
+        auth_provider="google",
+    )
+
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
 
 
 @app.post("/signup", response_model=UserProfile, status_code=status.HTTP_201_CREATED, tags=["auth"])
@@ -146,6 +282,30 @@ def login_with_oauth2_form(
     db: Session = Depends(get_db),
 ):
     return authenticate_and_build_token(db, form_data.username, form_data.password)
+
+
+@app.post("/google-login", response_model=TokenResponse, tags=["auth"])
+def google_login(payload: GoogleLoginRequest, db: Session = Depends(get_db)):
+    claims = verify_firebase_id_token(payload.id_token)
+
+    try:
+        user = get_or_create_google_user(db, claims)
+        return build_token_response(user)
+    except HTTPException:
+        db.rollback()
+        raise
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Could not link Google account because another account already uses those details.",
+        ) from exc
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Database error while signing in with Google.",
+        ) from exc
 
 
 @app.post("/logout", response_model=MessageResponse, tags=["auth"])
