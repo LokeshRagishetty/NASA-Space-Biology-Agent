@@ -3,35 +3,220 @@
 <head>
     <title>NASA Space Biology Agent</title>
     <style>
-        body { font-family: 'Segoe UI', sans-serif; max-width: 900px; margin: 20px auto; background: #f8f9fa; }
-        h1 { color: #0b5394; text-align: center; }
-        .controls { display: flex; gap: 10px; margin-bottom: 10px; }
-        #chat { height: 500px; border: 1px solid #ccc; padding: 15px; overflow-y: auto; background: white; margin-bottom: 10px; }
-        .msg { padding: 10px; margin: 6px 0; border-radius: 8px; max-width: 80%; line-height: 1.5; }
-        .user { background: #dfefff; margin-left: auto; text-align: right; }
-        .ai { background: #e8f5e9; }
-        input, button { padding: 10px; font-size: 16px; }
-        input { width: 70%; }
-        blockquote { border-left: 4px solid #0b5394; padding-left: 16px; margin: 12px 0; color: #2c3e50; font-style: italic; }
-        h3 { margin: 14px 0 8px; color: #0b5394; }
-        strong { color: #0b5394; }
+        body {
+            font-family: 'Segoe UI', sans-serif;
+            max-width: 960px;
+            margin: 20px auto;
+            background: #f8f9fa;
+            color: #172033;
+        }
+        h1 {
+            color: #0b5394;
+            text-align: center;
+        }
+        .panel {
+            border: 1px solid #ccd6e0;
+            background: white;
+            padding: 14px;
+            margin-bottom: 12px;
+        }
+        .auth-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 10px;
+            align-items: center;
+        }
+        .controls {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto auto auto;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        #chat {
+            height: 500px;
+            border: 1px solid #ccc;
+            padding: 15px;
+            overflow-y: auto;
+            background: white;
+            margin-bottom: 10px;
+        }
+        .msg {
+            padding: 10px;
+            margin: 6px 0;
+            border-radius: 8px;
+            max-width: 80%;
+            line-height: 1.5;
+        }
+        .user {
+            background: #dfefff;
+            margin-left: auto;
+            text-align: right;
+        }
+        .ai {
+            background: #e8f5e9;
+        }
+        input, button {
+            padding: 10px;
+            font-size: 16px;
+            box-sizing: border-box;
+        }
+        input {
+            width: 100%;
+            border: 1px solid #ccd6e0;
+        }
+        button {
+            border: 1px solid #0b5394;
+            background: #0b5394;
+            color: white;
+            cursor: pointer;
+        }
+        button.secondary {
+            background: #f8f9fa;
+            color: #0b5394;
+        }
+        button:disabled {
+            opacity: 0.55;
+            cursor: not-allowed;
+        }
+        #authStatus {
+            margin-top: 10px;
+            color: #405166;
+            min-height: 22px;
+        }
+        blockquote {
+            border-left: 4px solid #0b5394;
+            padding-left: 16px;
+            margin: 12px 0;
+            color: #2c3e50;
+            font-style: italic;
+        }
+        h3 {
+            margin: 14px 0 8px;
+            color: #0b5394;
+        }
+        strong {
+            color: #0b5394;
+        }
+        @media (max-width: 760px) {
+            body {
+                margin: 12px;
+            }
+            .auth-grid,
+            .controls {
+                grid-template-columns: 1fr;
+            }
+            .msg {
+                max-width: 100%;
+            }
+        }
     </style>
 </head>
 <body>
     <h1>🚀 NASA Space Biology Knowledge Engine</h1>
+
+    <div class="panel">
+        <div class="auth-grid">
+            <input type="text" id="username" placeholder="Username or email">
+            <input type="email" id="email" placeholder="Email for signup">
+            <input type="password" id="password" placeholder="Password">
+            <div style="display: flex; gap: 8px;">
+                <button onclick="signup()">Sign up</button>
+                <button onclick="login()">Log in</button>
+                <button class="secondary" onclick="logout()">Log out</button>
+            </div>
+        </div>
+        <div id="authStatus"></div>
+    </div>
+
     <div class="controls">
         <input type="text" id="question" placeholder="Ask about space biology, NASA research, or data..." onkeypress="handleKeyPress(event)">
-        <button onclick="ask()">Ask</button>
-        <button onclick="newChat()" style="background: #f8f9fa; border: 1px solid #0b5394; color: #0b5394;">New Chat</button>
+        <button id="askButton" onclick="ask()">Ask</button>
+        <button class="secondary" onclick="loadHistory()">History</button>
+        <button class="secondary" onclick="newChat()">New Chat</button>
     </div>
     <div id="chat"></div>
 
     <script>
-        // Generate a persistent session ID for this browser tab
         let sessionId = sessionStorage.getItem('nasa_session_id');
         if (!sessionId) {
             sessionId = 'session_' + Date.now();
             sessionStorage.setItem('nasa_session_id', sessionId);
+        }
+
+        let accessToken = localStorage.getItem('nasa_access_token');
+
+        function setStatus(message) {
+            document.getElementById('authStatus').textContent = message;
+        }
+
+        function authHeaders(extra = {}) {
+            const headers = {...extra};
+            if (accessToken) {
+                headers.Authorization = `Bearer ${accessToken}`;
+            }
+            return headers;
+        }
+
+        async function initializeAuth() {
+            if (!accessToken) {
+                setStatus('Not signed in');
+                return;
+            }
+
+            try {
+                const res = await fetch('/me', {headers: authHeaders()});
+                if (!res.ok) throw new Error('Session expired');
+                const user = await res.json();
+                setStatus(`Signed in as ${user.username}`);
+            } catch (err) {
+                accessToken = null;
+                localStorage.removeItem('nasa_access_token');
+                setStatus('Not signed in');
+            }
+        }
+
+        async function signup() {
+            const username = document.getElementById('username').value.trim();
+            const email = document.getElementById('email').value.trim();
+            const password = document.getElementById('password').value;
+            if (!username || !email || !password) return setStatus('Enter username, email, and password');
+
+            const res = await fetch('/signup', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({username, email, password})
+            });
+            const data = await res.json();
+            if (!res.ok) return setStatus(data.detail || 'Signup failed');
+
+            setStatus(`Created ${data.username}. Log in to continue.`);
+        }
+
+        async function login() {
+            const username = document.getElementById('username').value.trim();
+            const password = document.getElementById('password').value;
+            if (!username || !password) return setStatus('Enter username/email and password');
+
+            const res = await fetch('/login', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({username, password})
+            });
+            const data = await res.json();
+            if (!res.ok) return setStatus(data.detail || 'Login failed');
+
+            accessToken = data.access_token;
+            localStorage.setItem('nasa_access_token', accessToken);
+            setStatus(`Signed in as ${data.user.username}`);
+        }
+
+        async function logout() {
+            if (accessToken) {
+                await fetch('/logout', {method: 'POST', headers: authHeaders()}).catch(() => {});
+            }
+            accessToken = null;
+            localStorage.removeItem('nasa_access_token');
+            setStatus('Not signed in');
         }
 
         function handleKeyPress(e) {
@@ -44,6 +229,7 @@
             const input = document.getElementById("question");
             const q = input.value.trim();
             if (!q) return;
+            if (!accessToken) return setStatus('Log in before asking');
 
             const chat = document.getElementById("chat");
             chat.innerHTML += `<div class="msg user">👤 ${q}</div>`;
@@ -51,34 +237,56 @@
             chat.scrollTop = chat.scrollHeight;
 
             try {
-                chat.innerHTML += `<div class="msg ai">⏳ Thinking...</div>`;
+                chat.innerHTML += `<div class="msg ai" id="thinking">⏳ Thinking...</div>`;
                 const res = await fetch("/ask", {
                     method: "POST",
-                    headers: {
+                    headers: authHeaders({
                         "Content-Type": "application/json",
-                        "X-Session-ID": sessionId  // Send session ID
-                    },
+                        "X-Session-ID": sessionId
+                    }),
                     body: JSON.stringify({question: q})
                 });
                 const data = await res.json();
+                document.getElementById("thinking")?.remove();
 
-                // Safely render HTML
+                if (!res.ok) throw new Error(data.detail || 'Request failed');
+
                 const parser = new DOMParser();
                 const doc = parser.parseFromString(data.answer, 'text/html');
                 const cleanHTML = doc.body.innerHTML;
                 chat.innerHTML += `<div class="msg ai">🤖 ${cleanHTML}</div>`;
                 chat.scrollTop = chat.scrollHeight;
             } catch (err) {
+                document.getElementById("thinking")?.remove();
                 chat.innerHTML += `<div class="msg ai">❌ Error: ${err.message}</div>`;
             }
         }
 
+        async function loadHistory() {
+            if (!accessToken) return setStatus('Log in before loading history');
+
+            const chat = document.getElementById("chat");
+            const res = await fetch('/history', {headers: authHeaders()});
+            const data = await res.json();
+            if (!res.ok) return setStatus(data.detail || 'History failed');
+
+            chat.innerHTML = '';
+            data.reverse().forEach(item => {
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(item.answer, 'text/html');
+                chat.innerHTML += `<div class="msg user">👤 ${item.question}</div>`;
+                chat.innerHTML += `<div class="msg ai">🤖 ${doc.body.innerHTML}</div>`;
+            });
+            chat.scrollTop = chat.scrollHeight;
+        }
+
         function newChat() {
             document.getElementById("chat").innerHTML = "";
-            // Optional: reset session (or keep same session for continuity)
-            // sessionId = 'session_' + Date.now();
-            // sessionStorage.setItem('nasa_session_id', sessionId);
+            sessionId = 'session_' + Date.now();
+            sessionStorage.setItem('nasa_session_id', sessionId);
         }
+
+        initializeAuth();
     </script>
 </body>
 </html>
