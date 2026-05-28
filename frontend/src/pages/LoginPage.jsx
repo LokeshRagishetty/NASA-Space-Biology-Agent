@@ -67,7 +67,7 @@ export default function LoginPage() {
       <PageTransition>
         <form className="space-y-4" onSubmit={handleSubmit}>
           {error && (
-            <div className="flex gap-3 rounded-2xl border border-red-400/30 bg-red-500/10 p-3 text-sm text-red-100 light:text-red-700">
+            <div className="flex gap-3 rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-400/30 dark:bg-red-500/10 dark:text-red-100">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
               <span>{error}</span>
             </div>
@@ -80,7 +80,7 @@ export default function LoginPage() {
           )}
 
           <label className="block">
-            <span className="mb-2 flex items-center gap-2 text-sm font-medium text-slate-300 light:text-slate-700">
+            <span className="mb-2 flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
               <Mail className="h-4 w-4" />
               Email or username
             </span>
@@ -97,7 +97,7 @@ export default function LoginPage() {
           </label>
 
           <label className="block">
-            <span className="mb-2 flex items-center gap-2 text-sm font-medium text-slate-300 light:text-slate-700">
+            <span className="mb-2 flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
               <Lock className="h-4 w-4" />
               Password
             </span>
@@ -114,7 +114,7 @@ export default function LoginPage() {
               />
               <button
                 type="button"
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white light:hover:text-slate-900"
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-900 dark:hover:text-white"
                 onClick={() => setShowPassword((value) => !value)}
                 aria-label={showPassword ? 'Hide password' : 'Show password'}
               >
@@ -124,8 +124,8 @@ export default function LoginPage() {
           </label>
 
           <div className="flex items-center justify-between text-sm">
-            <label className="flex items-center gap-2 text-slate-400 light:text-slate-600">
-              <input className="h-4 w-4 rounded border-white/20 bg-white/10" type="checkbox" />
+            <label className="flex items-center gap-2 text-slate-600 dark:text-slate-400">
+              <input className="h-4 w-4 rounded border-slate-300 bg-white dark:border-white/20 dark:bg-white/10" type="checkbox" />
               Remember me
             </label>
             <Link to="/forgot-password" className="font-medium text-comet hover:text-aurora">
@@ -139,9 +139,9 @@ export default function LoginPage() {
         </form>
 
         <div className="my-5 flex items-center gap-3">
-          <div className="h-px flex-1 bg-white/10 light:bg-slate-200" />
+          <div className="h-px flex-1 bg-slate-200 dark:bg-white/10" />
           <span className="text-xs uppercase tracking-[0.22em] text-slate-500">or</span>
-          <div className="h-px flex-1 bg-white/10 light:bg-slate-200" />
+          <div className="h-px flex-1 bg-slate-200 dark:bg-white/10" />
         </div>
 
         <button className="secondary-button w-full" type="button" onClick={handleGoogle} disabled={googleLoading}>

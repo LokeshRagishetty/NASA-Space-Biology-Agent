@@ -8,7 +8,7 @@ export default function ProtectedRoute({ children }) {
 
   if (booting) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-space-radial">
+      <main className="flex min-h-screen items-center justify-center bg-slate-50 dark:bg-space-radial">
         <Loader2 className="h-8 w-8 animate-spin text-comet" />
       </main>
     )

@@ -44,20 +44,20 @@ export default function ForgotPasswordPage() {
       <PageTransition>
         <form className="space-y-4" onSubmit={handleSubmit}>
           {error && (
-            <div className="flex gap-3 rounded-2xl border border-red-400/30 bg-red-500/10 p-3 text-sm text-red-100 light:text-red-700">
+            <div className="flex gap-3 rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-400/30 dark:bg-red-500/10 dark:text-red-100">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
               <span>{error}</span>
             </div>
           )}
           {success && (
-            <div className="flex gap-3 rounded-2xl border border-aurora/30 bg-aurora/10 p-3 text-sm text-aurora light:text-emerald-700">
+            <div className="flex gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700 dark:border-aurora/30 dark:bg-aurora/10 dark:text-aurora">
               <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
               <span>{success}</span>
             </div>
           )}
 
           <label className="block">
-            <span className="mb-2 flex items-center gap-2 text-sm font-medium text-slate-300 light:text-slate-700">
+            <span className="mb-2 flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
               <Mail className="h-4 w-4" />
               Email
             </span>

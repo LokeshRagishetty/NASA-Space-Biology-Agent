@@ -5,14 +5,12 @@ import missionPatch from '../assets/mission-patch.svg'
 
 export default function AuthLayout({ children, title, subtitle, footer }) {
   return (
-    <main className="relative min-h-screen overflow-hidden bg-space-radial text-white light:bg-slate-50 light:text-slate-950">
-      <div className="space-grid absolute inset-0 opacity-80" />
-      <div className="star-field absolute inset-0 animate-drift opacity-50" />
-      <div className="absolute left-[-12rem] top-[-12rem] h-96 w-96 rounded-full bg-comet/20 blur-3xl" />
-      <div className="absolute bottom-[-14rem] right-[-8rem] h-96 w-96 rounded-full bg-solar/20 blur-3xl" />
+    <main className="relative min-h-screen overflow-hidden bg-slate-50 text-slate-950 dark:bg-space-radial dark:text-white">
+      <div className="space-grid absolute inset-0 opacity-40 dark:opacity-80" />
+      <div className="star-field absolute inset-0 animate-drift opacity-20 dark:opacity-50" />
 
       <section className="relative mx-auto grid min-h-screen w-full max-w-7xl grid-cols-1 gap-8 px-4 py-8 sm:px-6 lg:grid-cols-[1.05fr_0.95fr] lg:px-8">
-        <div className="hidden flex-col justify-between rounded-[2rem] border border-white/10 bg-white/[0.05] p-8 shadow-panel backdrop-blur-2xl light:border-slate-200 light:bg-white/70 lg:flex">
+        <div className="hidden flex-col justify-between rounded-[2rem] border border-slate-200 bg-white/70 p-8 shadow-panel backdrop-blur-2xl dark:border-white/10 dark:bg-white/[0.05] lg:flex">
           <Link to="/" className="flex w-fit items-center gap-3">
             <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-comet to-solar text-slate-950">
               <Rocket className="h-6 w-6" />
@@ -37,21 +35,21 @@ export default function AuthLayout({ children, title, subtitle, footer }) {
             <h1 className="text-5xl font-semibold leading-tight tracking-tight">
               Explore space biology with a private research cockpit.
             </h1>
-            <p className="mt-5 text-base leading-7 text-slate-300 light:text-slate-600">
+            <p className="mt-5 text-base leading-7 text-slate-600 dark:text-slate-300">
               Search NASA ADS, synthesize web evidence, and keep your mission notes tied to your account.
             </p>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
-            <div className="rounded-3xl border border-white/10 bg-white/[0.05] p-4 light:border-slate-200 light:bg-white">
+            <div className="rounded-3xl border border-slate-200 bg-white p-4 dark:border-white/10 dark:bg-white/[0.05]">
               <ShieldCheck className="mb-3 h-5 w-5 text-aurora" />
               <p className="text-sm font-medium">JWT secured</p>
-              <p className="text-xs text-slate-400 light:text-slate-500">Protected AI sessions</p>
+              <p className="text-xs text-slate-500 dark:text-slate-400">Protected AI sessions</p>
             </div>
-            <div className="rounded-3xl border border-white/10 bg-white/[0.05] p-4 light:border-slate-200 light:bg-white">
+            <div className="rounded-3xl border border-slate-200 bg-white p-4 dark:border-white/10 dark:bg-white/[0.05]">
               <Sparkles className="mb-3 h-5 w-5 text-solar" />
               <p className="text-sm font-medium">Groq powered</p>
-              <p className="text-xs text-slate-400 light:text-slate-500">Fast answer synthesis</p>
+              <p className="text-xs text-slate-500 dark:text-slate-400">Fast answer synthesis</p>
             </div>
           </div>
         </div>
@@ -70,15 +68,15 @@ export default function AuthLayout({ children, title, subtitle, footer }) {
                 </span>
                 <span className="font-semibold">NASA Space Biology AI Agent</span>
               </div>
-              <h2 className="text-3xl font-semibold tracking-tight text-white light:text-slate-950">
+              <h2 className="text-3xl font-semibold tracking-tight text-slate-950 dark:text-white">
                 {title}
               </h2>
-              <p className="mt-2 text-sm leading-6 text-slate-400 light:text-slate-600">{subtitle}</p>
+              <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-400">{subtitle}</p>
             </div>
 
             {children}
 
-            {footer && <div className="mt-6 text-center text-sm text-slate-400 light:text-slate-600">{footer}</div>}
+            {footer && <div className="mt-6 text-center text-sm text-slate-600 dark:text-slate-400">{footer}</div>}
           </motion.div>
         </div>
       </section>

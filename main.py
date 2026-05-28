@@ -23,7 +23,7 @@ from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_groq import ChatGroq
 from sqlalchemy import inspect, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from auth import (
     ACCESS_TOKEN_EXPIRE_MINUTES,
@@ -33,12 +33,17 @@ from auth import (
     get_password_hash,
     verify_firebase_id_token,
 )
-from database import Base, engine, get_db
-from models import ChatHistory, User
+from database import Base, SessionLocal, engine, get_db
+from models import ChatHistory, Conversation, Message, User, utc_now
 from schemas import (
     ChatHistoryResponse,
     ChatRequest,
     ChatResponse,
+    ConversationCreate,
+    ConversationMessageCreate,
+    ConversationResponse,
+    ConversationSendResponse,
+    ConversationUpdate,
     GoogleLoginRequest,
     MessageResponse,
     TokenResponse,
@@ -80,11 +85,100 @@ def ensure_user_auth_columns() -> None:
         )
 
 
+def generate_conversation_title(prompt: str) -> str:
+    """Create a short, readable title from the first user prompt."""
+    cleaned = re.sub(r"<[^>]+>", " ", prompt or "")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if not cleaned:
+        return "New chat"
+
+    words = cleaned.split()
+    title = " ".join(words[:8])
+    if len(words) > 8 or len(title) > 64:
+        title = title[:64].rstrip(" ,.;:-") + "..."
+    return title[:140]
+
+
+def migrate_legacy_chat_history() -> None:
+    """Convert old one-row chats into conversation/message pairs once."""
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    if not {"chat_history", "conversations", "messages"}.issubset(tables):
+        return
+
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS chat_history_migrations (
+                    chat_history_id INTEGER PRIMARY KEY,
+                    conversation_id INTEGER NOT NULL
+                )
+                """
+            )
+        )
+
+    db = SessionLocal()
+    try:
+        migrated_ids = {
+            row[0]
+            for row in db.execute(text("SELECT chat_history_id FROM chat_history_migrations")).all()
+        }
+        legacy_chats = db.query(ChatHistory).order_by(ChatHistory.timestamp.asc()).all()
+
+        for chat in legacy_chats:
+            if chat.id in migrated_ids:
+                continue
+
+            conversation = Conversation(
+                user_id=chat.user_id,
+                title=generate_conversation_title(chat.question),
+                created_at=chat.timestamp,
+                updated_at=chat.timestamp,
+            )
+            db.add(conversation)
+            db.flush()
+            db.add_all(
+                [
+                    Message(
+                        conversation_id=conversation.id,
+                        role="user",
+                        content=chat.question,
+                        created_at=chat.timestamp,
+                    ),
+                    Message(
+                        conversation_id=conversation.id,
+                        role="assistant",
+                        content=chat.answer,
+                        created_at=chat.timestamp,
+                    ),
+                ]
+            )
+            db.execute(
+                text(
+                    """
+                    INSERT OR IGNORE INTO chat_history_migrations
+                    (chat_history_id, conversation_id)
+                    VALUES (:chat_history_id, :conversation_id)
+                    """
+                ),
+                {"chat_history_id": chat.id, "conversation_id": conversation.id},
+            )
+
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # For SQLite/simple deployments. Use Alembic migrations before a large production launch.
     Base.metadata.create_all(bind=engine)
     ensure_user_auth_columns()
+    migrate_legacy_chat_history()
     yield
 
 
@@ -392,7 +486,7 @@ def format_nasa_response(raw: str) -> str:
     html = markdown.markdown(formatted, extensions=["nl2br"])
     html = html.replace(
         "<blockquote>",
-        '<blockquote style="border-left: 4px solid #0b5394; padding-left: 16px; margin: 16px 0; color: #2c3e50;">',
+        '<blockquote style="border-left: 4px solid #0b5394; padding-left: 16px; margin: 16px 0;">',
     )
 
     return html
@@ -513,6 +607,211 @@ def save_chat(db: Session, user_id: int, question: str, answer: str) -> ChatHist
     return chat
 
 
+def save_conversation_exchange(
+    db: Session,
+    current_user: User,
+    question: str,
+    answer: str,
+    conversation_id: Optional[int] = None,
+) -> Conversation:
+    if conversation_id is None:
+        conversation = Conversation(
+            user_id=current_user.id,
+            title=generate_conversation_title(question),
+        )
+        db.add(conversation)
+        db.flush()
+        first_user_message = True
+    else:
+        conversation = get_user_conversation(db, current_user, conversation_id)
+        first_user_message = not any(message.role == "user" for message in conversation.messages)
+
+    if first_user_message or conversation.title == "New chat":
+        conversation.title = generate_conversation_title(question)
+    conversation.updated_at = utc_now()
+    db.add_all(
+        [
+            Message(conversation_id=conversation.id, role="user", content=question),
+            Message(conversation_id=conversation.id, role="assistant", content=answer),
+        ]
+    )
+    return conversation
+
+
+def get_user_conversation(db: Session, current_user: User, conversation_id: int) -> Conversation:
+    conversation = (
+        db.query(Conversation)
+        .options(selectinload(Conversation.messages))
+        .filter(
+            Conversation.id == conversation_id,
+            Conversation.user_id == current_user.id,
+        )
+        .first()
+    )
+    if conversation is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found.")
+    return conversation
+
+
+def hydrate_agent_session(session_id: str, messages: list[Message]) -> None:
+    """Restore enough chat memory for follow-up prompts after a page reload."""
+    history = get_session_history(session_id)
+    if history.messages:
+        return
+
+    for message in messages:
+        if message.role == "user":
+            history.add_user_message(message.content)
+        elif message.role == "assistant":
+            history.add_ai_message(message.content)
+
+
+@app.post(
+    "/conversations",
+    response_model=ConversationResponse,
+    status_code=status.HTTP_201_CREATED,
+    tags=["conversations"],
+)
+def create_conversation(
+    payload: Optional[ConversationCreate] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    conversation = Conversation(
+        user_id=current_user.id,
+        title=payload.title if payload and payload.title else "New chat",
+    )
+    db.add(conversation)
+    db.commit()
+    db.refresh(conversation)
+    return conversation
+
+
+@app.get("/conversations", response_model=list[ConversationResponse], tags=["conversations"])
+def list_conversations(
+    limit: int = Query(80, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return (
+        db.query(Conversation)
+        .options(selectinload(Conversation.messages))
+        .filter(Conversation.user_id == current_user.id)
+        .order_by(Conversation.updated_at.desc(), Conversation.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
+
+@app.delete("/conversations", response_model=MessageResponse, tags=["conversations"])
+def clear_conversations(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    conversations = db.query(Conversation).filter(Conversation.user_id == current_user.id).all()
+    for conversation in conversations:
+        db.delete(conversation)
+    db.commit()
+    return {"message": "All conversations cleared."}
+
+
+@app.get("/conversations/{conversation_id}", response_model=ConversationResponse, tags=["conversations"])
+def read_conversation(
+    conversation_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return get_user_conversation(db, current_user, conversation_id)
+
+
+@app.patch("/conversations/{conversation_id}", response_model=ConversationResponse, tags=["conversations"])
+def update_conversation(
+    conversation_id: int,
+    payload: ConversationUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    conversation = get_user_conversation(db, current_user, conversation_id)
+    conversation.title = payload.title
+    conversation.updated_at = utc_now()
+    db.commit()
+    db.refresh(conversation)
+    return get_user_conversation(db, current_user, conversation_id)
+
+
+@app.delete("/conversations/{conversation_id}", response_model=MessageResponse, tags=["conversations"])
+def delete_conversation(
+    conversation_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    conversation = get_user_conversation(db, current_user, conversation_id)
+    db.delete(conversation)
+    db.commit()
+    return {"message": "Conversation deleted."}
+
+
+@app.post(
+    "/conversations/{conversation_id}/messages",
+    response_model=ConversationSendResponse,
+    tags=["conversations"],
+)
+def send_conversation_message(
+    conversation_id: int,
+    payload: ConversationMessageCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    conversation = get_user_conversation(db, current_user, conversation_id)
+    existing_messages = list(conversation.messages)
+    first_user_message = not any(message.role == "user" for message in existing_messages)
+    session_id = f"user:{current_user.id}:conversation:{conversation.id}"
+    hydrate_agent_session(session_id, existing_messages)
+
+    try:
+        user_message = Message(
+            conversation_id=conversation.id,
+            role="user",
+            content=payload.content,
+        )
+        db.add(user_message)
+        db.flush()
+
+        if first_user_message or conversation.title == "New chat":
+            conversation.title = generate_conversation_title(payload.content)
+        conversation.updated_at = utc_now()
+
+        answer = generate_ai_answer(payload.content, session_id)
+        assistant_message = Message(
+            conversation_id=conversation.id,
+            role="assistant",
+            content=answer,
+        )
+        db.add(assistant_message)
+        conversation.updated_at = utc_now()
+        db.commit()
+        db.refresh(user_message)
+        db.refresh(assistant_message)
+
+        updated_conversation = get_user_conversation(db, current_user, conversation.id)
+        return {
+            "conversation": updated_conversation,
+            "user_message": user_message,
+            "assistant_message": assistant_message,
+        }
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed message send: {str(e)}",
+        ) from e
+
+
 @app.post("/ask", response_model=ChatResponse, tags=["chat"])
 async def ask(
     chat_request: ChatRequest,
@@ -522,10 +821,14 @@ async def ask(
 ):
     session_suffix = req.headers.get("X-Session-ID", "default")
     session_id = f"user:{current_user.id}:{session_suffix}"
+    conversation_header = req.headers.get("X-Conversation-ID")
+    conversation_id = int(conversation_header) if conversation_header and conversation_header.isdigit() else None
 
     try:
         answer = generate_ai_answer(chat_request.question, session_id)
         save_chat(db, current_user.id, chat_request.question, answer)
+        save_conversation_exchange(db, current_user, chat_request.question, answer, conversation_id)
+        db.commit()
         return {"answer": answer}
     except HTTPException:
         raise

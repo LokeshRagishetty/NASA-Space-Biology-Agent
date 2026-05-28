@@ -3,13 +3,22 @@ import { ThemeContext } from './theme-context'
 
 const THEME_KEY = 'nasa_agent_theme'
 
+function getInitialTheme() {
+  const savedTheme = localStorage.getItem(THEME_KEY)
+  if (savedTheme === 'light' || savedTheme === 'dark') {
+    return savedTheme
+  }
+
+  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+}
+
 export function ThemeProvider({ children }) {
-  const [theme, setTheme] = useState(() => localStorage.getItem(THEME_KEY) || 'dark')
+  const [theme, setTheme] = useState(getInitialTheme)
 
   useEffect(() => {
     const root = document.documentElement
-    root.classList.toggle('light', theme === 'light')
     root.classList.toggle('dark', theme === 'dark')
+    root.style.colorScheme = theme
     localStorage.setItem(THEME_KEY, theme)
   }, [theme])
 

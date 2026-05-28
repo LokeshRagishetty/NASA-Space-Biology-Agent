@@ -33,6 +33,10 @@ export function AuthProvider({ children }) {
     setUser(null)
     localStorage.removeItem(TOKEN_KEY)
     localStorage.removeItem(USER_KEY)
+    Object.keys(localStorage)
+      .filter((key) => key.startsWith('nasa_agent_active_conversation_id'))
+      .forEach((key) => localStorage.removeItem(key))
+    sessionStorage.removeItem('nasa_agent_session_id')
     setAuthToken(null)
   }, [])
 

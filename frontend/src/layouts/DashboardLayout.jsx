@@ -13,13 +13,17 @@ export default function DashboardLayout() {
     history: [],
     loading: true,
     activeChatId: null,
+    activeTitle: 'New chat',
     selectChat: () => {},
     newChat: () => {},
+    renameChat: () => {},
+    deleteChat: () => {},
+    clearChats: () => {},
   })
   const { theme, toggleTheme } = useTheme()
 
   return (
-    <main className="flex min-h-screen bg-space-radial text-white light:bg-slate-100 light:text-slate-950">
+    <main className="flex h-screen overflow-hidden bg-slate-100 text-slate-950 dark:bg-space-radial dark:text-white">
       <Sidebar
         history={historyState.history}
         loading={historyState.loading}
@@ -32,12 +36,14 @@ export default function DashboardLayout() {
           historyState.newChat()
           setSidebarOpen(false)
         }}
+        onRenameChat={historyState.renameChat}
+        onDeleteChat={historyState.deleteChat}
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
       />
 
       <section className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-20 border-b border-white/10 bg-void/75 px-4 py-3 backdrop-blur-2xl light:border-slate-200 light:bg-white/80 sm:px-6">
+        <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/85 px-4 py-3 backdrop-blur-2xl dark:border-white/10 dark:bg-void/75 sm:px-6">
           <div className="flex items-center justify-between gap-4">
             <div className="flex min-w-0 items-center gap-3">
               <button
@@ -48,9 +54,9 @@ export default function DashboardLayout() {
               >
                 <Menu className="h-5 w-5" />
               </button>
-              <div className="hidden h-10 min-w-0 items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.05] px-4 text-sm text-slate-400 light:border-slate-200 light:bg-white md:flex">
+              <div className="hidden h-10 min-w-0 items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 text-sm text-slate-500 dark:border-white/10 dark:bg-white/[0.05] dark:text-slate-400 md:flex">
                 <Search className="h-4 w-4" />
-                <span className="truncate">Search history from the sidebar</span>
+                <span className="truncate">{historyState.activeTitle || 'Search history from the sidebar'}</span>
               </div>
             </div>
 
@@ -74,7 +80,12 @@ export default function DashboardLayout() {
         <Outlet context={{ setHistoryState }} />
       </section>
 
-      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <SettingsModal
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onClearConversations={historyState.clearChats}
+        conversationCount={historyState.history.length}
+      />
     </main>
   )
 }

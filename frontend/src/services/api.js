@@ -48,6 +48,42 @@ export async function getChatHistory() {
   return data
 }
 
+export async function getConversations() {
+  const { data } = await api.get('/conversations')
+  return data
+}
+
+export async function createConversation(title) {
+  const payload = title ? { title } : {}
+  const { data } = await api.post('/conversations', payload)
+  return data
+}
+
+export async function getConversation(conversationId) {
+  const { data } = await api.get(`/conversations/${conversationId}`)
+  return data
+}
+
+export async function renameConversation(conversationId, title) {
+  const { data } = await api.patch(`/conversations/${conversationId}`, { title })
+  return data
+}
+
+export async function deleteConversation(conversationId) {
+  const { data } = await api.delete(`/conversations/${conversationId}`)
+  return data
+}
+
+export async function clearConversations() {
+  const { data } = await api.delete('/conversations')
+  return data
+}
+
+export async function sendConversationMessage(conversationId, content) {
+  const { data } = await api.post(`/conversations/${conversationId}/messages`, { content })
+  return data
+}
+
 export async function askQuestion(question, sessionId) {
   const { data } = await api.post(
     '/ask',
@@ -62,12 +98,34 @@ export async function askQuestion(question, sessionId) {
 }
 
 export function getApiError(error, fallback = 'Something went wrong. Please try again.') {
+  const status = error?.response?.status
+
+  if (!error?.response || error?.code === 'ERR_NETWORK') {
+    return 'Backend unavailable. Check that the FastAPI server is running and reachable.'
+  }
+
+  if (status === 401) {
+    return 'Your session expired. Please sign in again.'
+  }
+
+  if (status === 403) {
+    return 'You do not have permission to perform this action.'
+  }
+
   if (error?.response?.data?.detail) {
     const detail = error.response.data.detail
     if (Array.isArray(detail)) {
       return detail.map((item) => item.msg).join(' ')
     }
     return detail
+  }
+
+  if (status === 422) {
+    return 'Invalid request. Please check the message and try again.'
+  }
+
+  if (status >= 500) {
+    return 'The AI service returned an invalid response. Please retry in a moment.'
   }
 
   if (error?.message) {
