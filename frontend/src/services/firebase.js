@@ -53,3 +53,4 @@ export async function sendFirebasePasswordReset(email) {
 
   await sendPasswordResetEmail(firebaseAuth, email)
 }
+console.log(import.meta.env)
