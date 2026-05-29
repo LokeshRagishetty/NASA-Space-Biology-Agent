@@ -3,6 +3,7 @@ import { useNavigate, useOutletContext } from 'react-router-dom'
 import {
   AlertCircle,
   BarChart3,
+  Cpu,
   Download,
   FileSearch,
   FileImage,
@@ -22,9 +23,11 @@ import {
   getApiError,
   getKnowledgeDocumentChunks,
   getKnowledgeDocumentChunkStats,
+  getKnowledgeDocumentEmbeddingStats,
   getKnowledgeDocumentText,
   getKnowledgeDocumentPreview,
   getKnowledgeDocuments,
+  regenerateKnowledgeDocumentEmbeddings,
   reprocessKnowledgeDocument,
   uploadKnowledgeDocument,
 } from '../services/api'
@@ -77,6 +80,20 @@ function formatDocumentType(document) {
 
 function getDocumentStatus(document) {
   return document?.processing_status || document?.status || 'pending'
+}
+
+function getEmbeddingStatus(document, embeddingStats) {
+  const status = getDocumentStatus(document)
+  if (ACTIVE_PROCESSING_STATUSES.has(status)) return 'Generating'
+  if (status === 'failed') return 'Unavailable'
+
+  const chunkCount = embeddingStats?.chunk_count || 0
+  const embeddingCount = embeddingStats?.embedding_count || 0
+
+  if (!chunkCount) return 'No chunks'
+  if (embeddingCount === chunkCount) return 'Ready'
+  if (!embeddingCount) return 'Missing'
+  return 'Partial'
 }
 
 function buildHighlightedSegments(text, query) {
@@ -275,13 +292,50 @@ function ExtractedTextModal({
   )
 }
 
-function DocumentAnalyticsCard({ loading, stats }) {
+function DocumentAnalyticsCard({
+  document,
+  embeddingError,
+  embeddingLoading,
+  embeddingStats,
+  loading,
+  onRegenerateEmbeddings,
+  regeneratingEmbeddings,
+  stats,
+}) {
   const statItems = [
     { label: 'Pages', value: stats?.page_count || 0 },
     { label: 'Extracted characters', value: stats?.extracted_characters || stats?.total_characters || 0 },
     { label: 'Chunks', value: stats?.chunk_count || 0 },
     { label: 'Estimated tokens', value: stats?.estimated_tokens || 0 },
   ]
+  const embeddingStatus = getEmbeddingStatus(document, embeddingStats)
+  const embeddingStatusClass = {
+    Ready:
+      'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-300/25 dark:bg-emerald-400/10 dark:text-emerald-100',
+    Generating:
+      'border-sky-200 bg-sky-50 text-sky-700 dark:border-comet/25 dark:bg-comet/10 dark:text-comet',
+    Missing:
+      'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-300/25 dark:bg-amber-400/10 dark:text-amber-100',
+    Partial:
+      'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-300/25 dark:bg-amber-400/10 dark:text-amber-100',
+    Unavailable:
+      'border-red-200 bg-red-50 text-red-700 dark:border-red-300/25 dark:bg-red-400/10 dark:text-red-100',
+    'No chunks':
+      'border-slate-200 bg-slate-50 text-slate-600 dark:border-white/10 dark:bg-white/[0.04] dark:text-slate-300',
+  }
+  const embeddingItems = [
+    { label: 'Embedding Status', value: embeddingStatus, type: 'status' },
+    { label: 'Embedding Count', value: embeddingStats?.embedding_count || 0, type: 'number' },
+    { label: 'Embedding Dimension', value: embeddingStats?.embedding_dimension || 0, type: 'number' },
+    { label: 'Model Name', value: embeddingStats?.embedding_model || 'all-MiniLM-L6-v2', type: 'text' },
+  ]
+  const displayedEmbeddingError =
+    embeddingError || (getDocumentStatus(document) === 'completed' ? document?.extraction_error : '')
+  const canRegenerate =
+    document &&
+    !ACTIVE_PROCESSING_STATUSES.has(getDocumentStatus(document)) &&
+    getDocumentStatus(document) !== 'failed' &&
+    Boolean(embeddingStats?.chunk_count)
 
   return (
     <div className="mb-4 border-b border-slate-200 pb-4 dark:border-white/10">
@@ -307,6 +361,66 @@ function DocumentAnalyticsCard({ loading, stats }) {
           ))}
         </div>
       )}
+
+      <div className="mt-5 border-t border-slate-200 pt-4 dark:border-white/10">
+        <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white">
+            <Cpu className="h-4 w-4 text-sky-600 dark:text-comet" />
+            Embedding Information
+          </div>
+          <button
+            type="button"
+            className="secondary-button py-2"
+            onClick={onRegenerateEmbeddings}
+            disabled={!canRegenerate || regeneratingEmbeddings}
+          >
+            {regeneratingEmbeddings ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4" />
+            )}
+            Regenerate
+          </button>
+        </div>
+
+        {displayedEmbeddingError && (
+          <div className="mb-3 flex gap-3 rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-400/30 dark:bg-red-500/10 dark:text-red-100">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{displayedEmbeddingError}</span>
+          </div>
+        )}
+
+        {embeddingLoading ? (
+          <div className="flex items-center gap-2 py-3 text-sm text-slate-500">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Loading embeddings
+          </div>
+        ) : (
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+            {embeddingItems.map((item) => (
+              <div
+                key={item.label}
+                className="min-w-0 border-l border-slate-200 pl-3 dark:border-white/10"
+              >
+                <p className="text-xs font-medium text-slate-500 dark:text-slate-400">{item.label}</p>
+                {item.type === 'status' ? (
+                  <span
+                    className={`mt-1 inline-flex h-7 max-w-full items-center rounded-full border px-2.5 text-xs font-semibold ${
+                      embeddingStatusClass[item.value] || embeddingStatusClass.Missing
+                    }`}
+                  >
+                    {item.value}
+                  </span>
+                ) : (
+                  <p className="mt-1 break-words text-lg font-semibold text-slate-950 dark:text-white">
+                    {item.type === 'number' ? formatNumber(item.value) : item.value}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   )
 }
@@ -439,6 +553,10 @@ export default function KnowledgeLibraryPage() {
   const [textSearch, setTextSearch] = useState('')
   const [chunkStats, setChunkStats] = useState(null)
   const [chunkStatsLoading, setChunkStatsLoading] = useState(false)
+  const [embeddingStats, setEmbeddingStats] = useState(null)
+  const [embeddingStatsLoading, setEmbeddingStatsLoading] = useState(false)
+  const [embeddingError, setEmbeddingError] = useState('')
+  const [regeneratingEmbeddingId, setRegeneratingEmbeddingId] = useState(null)
   const [chunksModalOpen, setChunksModalOpen] = useState(false)
   const [chunksPayload, setChunksPayload] = useState(null)
   const [chunksLoading, setChunksLoading] = useState(false)
@@ -517,6 +635,27 @@ export default function KnowledgeLibraryPage() {
     }
   }, [])
 
+  const loadEmbeddingStats = useCallback(async (documentId, { silent = false } = {}) => {
+    if (!silent) {
+      setEmbeddingStatsLoading(true)
+      setEmbeddingError('')
+    }
+
+    try {
+      const data = await getKnowledgeDocumentEmbeddingStats(documentId)
+      setEmbeddingStats(data)
+    } catch (err) {
+      setEmbeddingStats(null)
+      if (!silent) {
+        setEmbeddingError(getApiError(err, 'Could not load embedding information.'))
+      }
+    } finally {
+      if (!silent) {
+        setEmbeddingStatsLoading(false)
+      }
+    }
+  }, [])
+
   const loadDocumentChunks = useCallback(async (documentId) => {
     setChunksLoading(true)
     setChunksError('')
@@ -566,17 +705,19 @@ export default function KnowledgeLibraryPage() {
 
     // eslint-disable-next-line react-hooks/set-state-in-effect
     loadChunkStats(selectedDocument.id)
-  }, [loadChunkStats, selectedDocument])
+    loadEmbeddingStats(selectedDocument.id)
+  }, [loadChunkStats, loadEmbeddingStats, selectedDocument])
 
   useEffect(() => {
     if (!selectedDocument || !ACTIVE_PROCESSING_STATUSES.has(getDocumentStatus(selectedDocument))) return undefined
 
     const interval = window.setInterval(() => {
       loadChunkStats(selectedDocument.id, { silent: true })
+      loadEmbeddingStats(selectedDocument.id, { silent: true })
     }, 3000)
 
     return () => window.clearInterval(interval)
-  }, [loadChunkStats, selectedDocument])
+  }, [loadChunkStats, loadEmbeddingStats, selectedDocument])
 
   useEffect(() => {
     const modalStatus = textPayload?.status || getDocumentStatus(selectedDocument)
@@ -678,6 +819,7 @@ export default function KnowledgeLibraryPage() {
     setReprocessingId(document.id)
     setError('')
     setTextError('')
+    setEmbeddingError('')
 
     try {
       const updatedDocument = await reprocessKnowledgeDocument(document.id)
@@ -700,6 +842,7 @@ export default function KnowledgeLibraryPage() {
         setChunksError('')
       }
       setChunkStats(null)
+      setEmbeddingStats(null)
     } catch (err) {
       const message = getApiError(err, 'Could not reprocess document.')
       if (textModalOpen) {
@@ -709,6 +852,20 @@ export default function KnowledgeLibraryPage() {
       }
     } finally {
       setReprocessingId(null)
+    }
+  }
+
+  async function handleRegenerateEmbeddings(document) {
+    setRegeneratingEmbeddingId(document.id)
+    setEmbeddingError('')
+
+    try {
+      const data = await regenerateKnowledgeDocumentEmbeddings(document.id)
+      setEmbeddingStats(data)
+    } catch (err) {
+      setEmbeddingError(getApiError(err, 'Could not regenerate embeddings.'))
+    } finally {
+      setRegeneratingEmbeddingId(null)
     }
   }
 
@@ -910,7 +1067,16 @@ export default function KnowledgeLibraryPage() {
                   </div>
                 </div>
 
-                <DocumentAnalyticsCard loading={chunkStatsLoading} stats={chunkStats} />
+                <DocumentAnalyticsCard
+                  document={selectedDocument}
+                  embeddingError={embeddingError}
+                  embeddingLoading={embeddingStatsLoading}
+                  embeddingStats={embeddingStats}
+                  loading={chunkStatsLoading}
+                  onRegenerateEmbeddings={() => handleRegenerateEmbeddings(selectedDocument)}
+                  regeneratingEmbeddings={regeneratingEmbeddingId === selectedDocument.id}
+                  stats={chunkStats}
+                />
 
                 {getDocumentStatus(selectedDocument) === 'failed' && (
                   <div className="mb-4 flex gap-3 rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-400/30 dark:bg-red-500/10 dark:text-red-100">

@@ -132,6 +132,16 @@ export async function getKnowledgeDocumentChunkStats(documentId) {
   return data
 }
 
+export async function getKnowledgeDocumentEmbeddingStats(documentId) {
+  const { data } = await api.get(`/documents/${documentId}/embedding-stats`)
+  return data
+}
+
+export async function regenerateKnowledgeDocumentEmbeddings(documentId) {
+  const { data } = await api.post(`/documents/${documentId}/regenerate-embeddings`)
+  return data
+}
+
 export async function askQuestion(question, sessionId) {
   const { data } = await api.post(
     '/ask',

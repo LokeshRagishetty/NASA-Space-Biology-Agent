@@ -47,6 +47,7 @@ from schemas import (
     ConversationUpdate,
     DocumentChunksResponse,
     DocumentChunkStatsResponse,
+    DocumentEmbeddingStatsResponse,
     GoogleLoginRequest,
     KnowledgeDocumentResponse,
     KnowledgeDocumentTextResponse,
@@ -64,6 +65,11 @@ from services.document_processor import (
     STATUS_PROCESSING,
     process_document,
     reset_document_processing_state,
+)
+from services.embedding_service import (
+    EmbeddingServiceError,
+    get_document_embedding_statistics,
+    regenerate_document_embeddings,
 )
 
 load_dotenv()
@@ -149,6 +155,13 @@ def ensure_document_chunk_table() -> None:
     from models import DocumentChunk
 
     DocumentChunk.__table__.create(bind=engine, checkfirst=True)
+
+
+def ensure_chunk_embedding_table() -> None:
+    """Create the embedding table for existing SQLite/simple deployments."""
+    from models import ChunkEmbedding
+
+    ChunkEmbedding.__table__.create(bind=engine, checkfirst=True)
 
 
 def generate_conversation_title(prompt: str) -> str:
@@ -276,6 +289,7 @@ async def lifespan(app: FastAPI):
     ensure_user_auth_columns()
     ensure_knowledge_document_processing_columns()
     ensure_document_chunk_table()
+    ensure_chunk_embedding_table()
     migrate_legacy_chat_history()
     yield
 
@@ -836,6 +850,14 @@ def build_document_chunk_stats_response(db: Session, document: KnowledgeDocument
     return DocumentChunkStatsResponse(**get_document_chunk_statistics(db, document))
 
 
+def build_document_embedding_stats_response(db: Session, document: KnowledgeDocument) -> DocumentEmbeddingStatsResponse:
+    return DocumentEmbeddingStatsResponse(**get_document_embedding_statistics(db, document))
+
+
+def build_embedding_http_exception(exc: EmbeddingServiceError) -> HTTPException:
+    return HTTPException(status_code=exc.status_code, detail=str(exc))
+
+
 @app.post(
     "/knowledge/documents",
     response_model=KnowledgeDocumentResponse,
@@ -1010,6 +1032,75 @@ def read_document_chunk_stats(
 ):
     document = get_user_document(db, current_user, document_id)
     return build_document_chunk_stats_response(db, document)
+
+
+@app.get(
+    "/knowledge/documents/{document_id}/embedding-stats",
+    response_model=DocumentEmbeddingStatsResponse,
+    tags=["knowledge-library"],
+)
+def read_knowledge_document_embedding_stats(
+    document_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    document = get_user_document(db, current_user, document_id)
+    return build_document_embedding_stats_response(db, document)
+
+
+@app.get(
+    "/documents/{document_id}/embedding-stats",
+    response_model=DocumentEmbeddingStatsResponse,
+    tags=["knowledge-library"],
+)
+def read_document_embedding_stats(
+    document_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    document = get_user_document(db, current_user, document_id)
+    return build_document_embedding_stats_response(db, document)
+
+
+@app.post(
+    "/knowledge/documents/{document_id}/regenerate-embeddings",
+    response_model=DocumentEmbeddingStatsResponse,
+    tags=["knowledge-library"],
+)
+def regenerate_knowledge_document_embeddings(
+    document_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    document = get_user_document(db, current_user, document_id)
+    ensure_document_chunks_available(document)
+
+    try:
+        stats = regenerate_document_embeddings(db, document)
+        db.commit()
+        return DocumentEmbeddingStatsResponse(**stats)
+    except EmbeddingServiceError as exc:
+        db.rollback()
+        raise build_embedding_http_exception(exc) from exc
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not store document embeddings.",
+        ) from exc
+
+
+@app.post(
+    "/documents/{document_id}/regenerate-embeddings",
+    response_model=DocumentEmbeddingStatsResponse,
+    tags=["knowledge-library"],
+)
+def regenerate_document_embeddings_endpoint(
+    document_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return regenerate_knowledge_document_embeddings(document_id, current_user, db)
 
 
 @app.post(
