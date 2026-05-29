@@ -122,6 +122,16 @@ export async function reprocessKnowledgeDocument(documentId) {
   return data
 }
 
+export async function getKnowledgeDocumentChunks(documentId) {
+  const { data } = await api.get(`/documents/${documentId}/chunks`)
+  return data
+}
+
+export async function getKnowledgeDocumentChunkStats(documentId) {
+  const { data } = await api.get(`/documents/${documentId}/chunk-stats`)
+  return data
+}
+
 export async function askQuestion(question, sessionId) {
   const { data } = await api.post(
     '/ask',

@@ -182,3 +182,32 @@ class KnowledgeDocumentTextResponse(BaseModel):
     text: str = ""
     processed_at: Optional[datetime] = None
     extraction_error: Optional[str] = None
+
+
+class DocumentChunkResponse(BaseModel):
+    id: int
+    document_id: int
+    chunk_index: int
+    content: str
+    char_count: int
+    token_estimate: int
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DocumentChunksResponse(BaseModel):
+    document_id: int
+    chunk_count: int
+    chunks: list[DocumentChunkResponse] = Field(default_factory=list)
+
+
+class DocumentChunkStatsResponse(BaseModel):
+    document_id: int
+    page_count: int = 0
+    extracted_characters: int = 0
+    chunk_count: int
+    total_characters: int
+    chunked_characters: int = 0
+    average_chunk_size: int
+    estimated_tokens: int
