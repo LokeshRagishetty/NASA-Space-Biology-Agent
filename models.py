@@ -169,3 +169,29 @@ class DocumentChunk(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True, nullable=False)
 
     document: Mapped[KnowledgeDocument] = relationship("KnowledgeDocument", back_populates="chunks")
+    embedding: Mapped[Optional["ChunkEmbedding"]] = relationship(
+        "ChunkEmbedding",
+        back_populates="chunk",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+
+
+class ChunkEmbedding(Base):
+    __tablename__ = "chunk_embeddings"
+    __table_args__ = (
+        UniqueConstraint("chunk_id", name="uq_chunk_embeddings_chunk_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    chunk_id: Mapped[int] = mapped_column(
+        ForeignKey("document_chunks.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    embedding_model: Mapped[str] = mapped_column(String(120), index=True, nullable=False)
+    embedding_dimension: Mapped[int] = mapped_column(Integer, nullable=False)
+    embedding_vector: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True, nullable=False)
+
+    chunk: Mapped[DocumentChunk] = relationship("DocumentChunk", back_populates="embedding")

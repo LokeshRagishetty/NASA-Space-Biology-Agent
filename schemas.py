@@ -211,3 +211,11 @@ class DocumentChunkStatsResponse(BaseModel):
     chunked_characters: int = 0
     average_chunk_size: int
     estimated_tokens: int
+
+
+class DocumentEmbeddingStatsResponse(BaseModel):
+    document_id: int
+    embedding_model: str
+    chunk_count: int
+    embedding_count: int
+    embedding_dimension: int

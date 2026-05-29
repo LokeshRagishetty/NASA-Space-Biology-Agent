@@ -18,3 +18,4 @@ python-multipart
 bcrypt
 PyMuPDF
 easyocr
+sentence-transformers

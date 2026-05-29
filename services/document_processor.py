@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from models import KnowledgeDocument, utc_now
 from services.chunking_service import delete_document_chunks, replace_document_chunks
+from services.embedding_service import EmbeddingServiceError, sync_document_embeddings
 
 
 STATUS_PENDING = "pending"
@@ -134,6 +135,10 @@ def _mark_completed(db: Session, document: KnowledgeDocument, extracted_text: st
     document.extraction_error = None
     document.processed_at = utc_now()
     replace_document_chunks(db, document)
+    try:
+        sync_document_embeddings(db, document)
+    except EmbeddingServiceError as exc:
+        document.extraction_error = str(exc)
     _commit_status_update(db)
 
 

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
-from models import DocumentChunk, KnowledgeDocument
+from models import ChunkEmbedding, DocumentChunk, KnowledgeDocument
 
 
 DEFAULT_CHUNK_SIZE = int(os.getenv("KNOWLEDGE_CHUNK_SIZE", "1000"))
@@ -120,6 +120,16 @@ def move_start_to_word_boundary(text: str, start: int) -> int:
 
 
 def delete_document_chunks(db: Session, document_id: int) -> int:
+    chunk_ids = [
+        chunk_id
+        for (chunk_id,) in db.query(DocumentChunk.id)
+        .filter(DocumentChunk.document_id == document_id)
+        .all()
+    ]
+
+    if chunk_ids:
+        db.query(ChunkEmbedding).filter(ChunkEmbedding.chunk_id.in_(chunk_ids)).delete(synchronize_session=False)
+
     return (
         db.query(DocumentChunk)
         .filter(DocumentChunk.document_id == document_id)
