@@ -6,6 +6,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from models import KnowledgeDocument, utc_now
+from services.chunking_service import delete_document_chunks, replace_document_chunks
 
 
 STATUS_PENDING = "pending"
@@ -35,6 +36,7 @@ def reset_document_processing_state(db: Session, document: KnowledgeDocument) ->
     document.extracted_text = None
     document.extraction_error = None
     document.processed_at = None
+    delete_document_chunks(db, document.id)
     db.commit()
     db.refresh(document)
     return document
@@ -131,6 +133,7 @@ def _mark_completed(db: Session, document: KnowledgeDocument, extracted_text: st
     document.extracted_text = extracted_text
     document.extraction_error = None
     document.processed_at = utc_now()
+    replace_document_chunks(db, document)
     _commit_status_update(db)
 
 
@@ -138,6 +141,7 @@ def _mark_failed(db: Session, document: KnowledgeDocument, error_message: str) -
     document.processing_status = STATUS_FAILED
     document.extraction_error = error_message[:2000]
     document.processed_at = utc_now()
+    delete_document_chunks(db, document.id)
     _commit_status_update(db)
 
 

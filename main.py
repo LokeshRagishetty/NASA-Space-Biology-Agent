@@ -45,6 +45,8 @@ from schemas import (
     ConversationResponse,
     ConversationSendResponse,
     ConversationUpdate,
+    DocumentChunksResponse,
+    DocumentChunkStatsResponse,
     GoogleLoginRequest,
     KnowledgeDocumentResponse,
     KnowledgeDocumentTextResponse,
@@ -54,8 +56,12 @@ from schemas import (
     UserLogin,
     UserProfile,
 )
+from services.chunking_service import get_document_chunk_statistics, list_document_chunks
 from services.document_processor import (
+    STATUS_COMPLETED,
+    STATUS_FAILED,
     STATUS_PENDING,
+    STATUS_PROCESSING,
     process_document,
     reset_document_processing_state,
 )
@@ -136,6 +142,13 @@ def ensure_knowledge_document_processing_columns() -> None:
                 """
             )
         )
+
+
+def ensure_document_chunk_table() -> None:
+    """Create the chunk table for existing SQLite/simple deployments."""
+    from models import DocumentChunk
+
+    DocumentChunk.__table__.create(bind=engine, checkfirst=True)
 
 
 def generate_conversation_title(prompt: str) -> str:
@@ -262,6 +275,7 @@ async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     ensure_user_auth_columns()
     ensure_knowledge_document_processing_columns()
+    ensure_document_chunk_table()
     migrate_legacy_chat_history()
     yield
 
@@ -784,6 +798,44 @@ def build_document_text_response(document: KnowledgeDocument) -> KnowledgeDocume
     )
 
 
+def ensure_document_chunks_available(document: KnowledgeDocument) -> None:
+    processing_status_value = document.processing_status or STATUS_PENDING
+    if processing_status_value in {STATUS_PENDING, STATUS_PROCESSING}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Document is still processing. Chunks will be available after extraction completes.",
+        )
+    if processing_status_value == STATUS_FAILED:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=document.extraction_error or "Document processing failed. Reprocess the document to try again.",
+        )
+    if processing_status_value != STATUS_COMPLETED:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Document chunks are not available yet.",
+        )
+    if document.extracted_text is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Document text has not been extracted yet.",
+        )
+
+
+def build_document_chunks_response(db: Session, document: KnowledgeDocument) -> DocumentChunksResponse:
+    ensure_document_chunks_available(document)
+    chunks = list_document_chunks(db, document.id)
+    return DocumentChunksResponse(
+        document_id=document.id,
+        chunk_count=len(chunks),
+        chunks=chunks,
+    )
+
+
+def build_document_chunk_stats_response(db: Session, document: KnowledgeDocument) -> DocumentChunkStatsResponse:
+    return DocumentChunkStatsResponse(**get_document_chunk_statistics(db, document))
+
+
 @app.post(
     "/knowledge/documents",
     response_model=KnowledgeDocumentResponse,
@@ -902,6 +954,62 @@ def read_document_text(
 ):
     document = get_user_document(db, current_user, document_id)
     return build_document_text_response(document)
+
+
+@app.get(
+    "/knowledge/documents/{document_id}/chunks",
+    response_model=DocumentChunksResponse,
+    tags=["knowledge-library"],
+)
+def read_knowledge_document_chunks(
+    document_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    document = get_user_document(db, current_user, document_id)
+    return build_document_chunks_response(db, document)
+
+
+@app.get(
+    "/documents/{document_id}/chunks",
+    response_model=DocumentChunksResponse,
+    tags=["knowledge-library"],
+)
+def read_document_chunks(
+    document_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    document = get_user_document(db, current_user, document_id)
+    return build_document_chunks_response(db, document)
+
+
+@app.get(
+    "/knowledge/documents/{document_id}/chunk-stats",
+    response_model=DocumentChunkStatsResponse,
+    tags=["knowledge-library"],
+)
+def read_knowledge_document_chunk_stats(
+    document_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    document = get_user_document(db, current_user, document_id)
+    return build_document_chunk_stats_response(db, document)
+
+
+@app.get(
+    "/documents/{document_id}/chunk-stats",
+    response_model=DocumentChunkStatsResponse,
+    tags=["knowledge-library"],
+)
+def read_document_chunk_stats(
+    document_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    document = get_user_document(db, current_user, document_id)
+    return build_document_chunk_stats_response(db, document)
 
 
 @app.post(

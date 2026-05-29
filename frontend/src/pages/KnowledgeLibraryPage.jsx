@@ -2,10 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useOutletContext } from 'react-router-dom'
 import {
   AlertCircle,
+  BarChart3,
   Download,
   FileSearch,
   FileImage,
   FileText,
+  Layers,
   Library,
   Loader2,
   RefreshCw,
@@ -18,6 +20,8 @@ import PageTransition from '../components/PageTransition'
 import {
   deleteKnowledgeDocument,
   getApiError,
+  getKnowledgeDocumentChunks,
+  getKnowledgeDocumentChunkStats,
   getKnowledgeDocumentText,
   getKnowledgeDocumentPreview,
   getKnowledgeDocuments,
@@ -29,6 +33,7 @@ const ACCEPTED_TYPES = '.pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpe
 const ALLOWED_EXTENSIONS = new Set(['pdf', 'png', 'jpg', 'jpeg'])
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 const ACTIVE_PROCESSING_STATUSES = new Set(['pending', 'processing'])
+const EMPTY_CHUNKS = []
 
 function formatBytes(bytes) {
   if (!Number.isFinite(bytes)) return '0 B'
@@ -42,6 +47,11 @@ function formatBytes(bytes) {
   }
 
   return `${size.toFixed(size >= 10 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`
+}
+
+function formatNumber(value) {
+  if (!Number.isFinite(value)) return '0'
+  return new Intl.NumberFormat().format(value)
 }
 
 function formatDate(value) {
@@ -265,6 +275,151 @@ function ExtractedTextModal({
   )
 }
 
+function DocumentAnalyticsCard({ loading, stats }) {
+  const statItems = [
+    { label: 'Pages', value: stats?.page_count || 0 },
+    { label: 'Extracted characters', value: stats?.extracted_characters || stats?.total_characters || 0 },
+    { label: 'Chunks', value: stats?.chunk_count || 0 },
+    { label: 'Estimated tokens', value: stats?.estimated_tokens || 0 },
+  ]
+
+  return (
+    <div className="mb-4 border-b border-slate-200 pb-4 dark:border-white/10">
+      <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white">
+        <BarChart3 className="h-4 w-4 text-sky-600 dark:text-comet" />
+        Document Analytics
+      </div>
+      {loading ? (
+        <div className="flex items-center gap-2 py-3 text-sm text-slate-500">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Loading analytics
+        </div>
+      ) : (
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          {statItems.map((item) => (
+            <div
+              key={item.label}
+              className="min-w-0 border-l border-slate-200 pl-3 dark:border-white/10"
+            >
+              <p className="text-xs font-medium text-slate-500 dark:text-slate-400">{item.label}</p>
+              <p className="mt-1 text-lg font-semibold text-slate-950 dark:text-white">{formatNumber(item.value)}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ChunksModal({ chunksPayload, document, error, loading, onClose, onQueryChange, query }) {
+  const chunks = chunksPayload?.chunks ?? EMPTY_CHUNKS
+  const status = getDocumentStatus(document)
+  const highlightedChunks = useMemo(
+    () =>
+      chunks.map((chunk) => ({
+        ...chunk,
+        highlight: buildHighlightedSegments(chunk.content, query),
+      })),
+    [chunks, query],
+  )
+  const matchCount = highlightedChunks.reduce((total, chunk) => total + chunk.highlight.count, 0)
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-3 backdrop-blur-sm sm:p-6">
+      <div className="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl dark:border-white/10 dark:bg-slate-950">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-200 p-4 dark:border-white/10 sm:p-5">
+          <div className="min-w-0">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <ProcessingStatusBadge status={status} />
+              <span className="rounded-full border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-500 dark:border-white/10 dark:text-slate-300">
+                {formatNumber(chunksPayload?.chunk_count || chunks.length)} chunks
+              </span>
+            </div>
+            <h2 className="truncate text-base font-semibold text-slate-950 dark:text-white sm:text-lg">
+              {document?.original_filename}
+            </h2>
+          </div>
+
+          <button type="button" className="icon-button shrink-0" onClick={onClose} aria-label="Close chunks">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="border-b border-slate-200 p-4 dark:border-white/10 sm:p-5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <label className="relative min-w-0 flex-1">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <input
+                className="field rounded-xl py-2 pl-9"
+                type="search"
+                placeholder="Search chunks"
+                value={query}
+                onChange={(event) => onQueryChange(event.target.value)}
+                disabled={!chunks.length}
+              />
+            </label>
+            <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+              {query.trim()
+                ? `${formatNumber(matchCount)} match${matchCount === 1 ? '' : 'es'}`
+                : `${formatNumber(chunks.length)} chunk${chunks.length === 1 ? '' : 's'}`}
+            </span>
+          </div>
+        </div>
+
+        {error && (
+          <div className="mx-4 mt-4 flex gap-3 rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-400/30 dark:bg-red-500/10 dark:text-red-100 sm:mx-5">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        <div className="min-h-[360px] space-y-3 overflow-auto p-4 sm:p-5">
+          {loading ? (
+            <div className="flex min-h-[320px] items-center justify-center gap-2 text-sm text-slate-500">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading chunks
+            </div>
+          ) : chunks.length ? (
+            highlightedChunks.map((chunk) => (
+              <article
+                key={chunk.id}
+                className="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-white/10 dark:bg-white/[0.04]"
+              >
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="text-sm font-semibold text-slate-950 dark:text-white">
+                    Chunk {chunk.chunk_index + 1}
+                  </h3>
+                  <div className="flex flex-wrap items-center gap-2 text-xs font-medium text-slate-500 dark:text-slate-400">
+                    <span>{formatNumber(chunk.char_count)} chars</span>
+                    <span>{formatNumber(chunk.token_estimate)} tokens</span>
+                  </div>
+                </div>
+                <pre className="whitespace-pre-wrap break-words text-sm leading-6 text-slate-800 dark:text-slate-100">
+                  {chunk.highlight.segments.map((segment, index) =>
+                    segment.match ? (
+                      <mark key={index} className="rounded bg-amber-200 px-0.5 text-slate-950">
+                        {segment.text}
+                      </mark>
+                    ) : (
+                      <span key={index}>{segment.text}</span>
+                    ),
+                  )}
+                </pre>
+              </article>
+            ))
+          ) : (
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500 dark:border-white/10 dark:bg-white/[0.04] dark:text-slate-300">
+              {ACTIVE_PROCESSING_STATUSES.has(status)
+                ? 'Chunks will be available after document processing completes.'
+                : 'No chunks were generated for this document.'}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function KnowledgeLibraryPage() {
   const navigate = useNavigate()
   const { setHistoryState } = useOutletContext()
@@ -282,6 +437,13 @@ export default function KnowledgeLibraryPage() {
   const [textLoading, setTextLoading] = useState(false)
   const [textError, setTextError] = useState('')
   const [textSearch, setTextSearch] = useState('')
+  const [chunkStats, setChunkStats] = useState(null)
+  const [chunkStatsLoading, setChunkStatsLoading] = useState(false)
+  const [chunksModalOpen, setChunksModalOpen] = useState(false)
+  const [chunksPayload, setChunksPayload] = useState(null)
+  const [chunksLoading, setChunksLoading] = useState(false)
+  const [chunksError, setChunksError] = useState('')
+  const [chunksSearch, setChunksSearch] = useState('')
   const [error, setError] = useState('')
 
   const selectedDocument = useMemo(
@@ -338,6 +500,38 @@ export default function KnowledgeLibraryPage() {
     }
   }, [])
 
+  const loadChunkStats = useCallback(async (documentId, { silent = false } = {}) => {
+    if (!silent) {
+      setChunkStatsLoading(true)
+    }
+
+    try {
+      const data = await getKnowledgeDocumentChunkStats(documentId)
+      setChunkStats(data)
+    } catch {
+      setChunkStats(null)
+    } finally {
+      if (!silent) {
+        setChunkStatsLoading(false)
+      }
+    }
+  }, [])
+
+  const loadDocumentChunks = useCallback(async (documentId) => {
+    setChunksLoading(true)
+    setChunksError('')
+
+    try {
+      const data = await getKnowledgeDocumentChunks(documentId)
+      setChunksPayload(data)
+    } catch (err) {
+      setChunksPayload(null)
+      setChunksError(getApiError(err, 'Could not load document chunks.'))
+    } finally {
+      setChunksLoading(false)
+    }
+  }, [])
+
   useEffect(() => {
     setHistoryState({
       history: [],
@@ -366,6 +560,23 @@ export default function KnowledgeLibraryPage() {
 
     return () => window.clearInterval(interval)
   }, [hasActiveProcessing, loadDocuments])
+
+  useEffect(() => {
+    if (!selectedDocument) return
+
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    loadChunkStats(selectedDocument.id)
+  }, [loadChunkStats, selectedDocument])
+
+  useEffect(() => {
+    if (!selectedDocument || !ACTIVE_PROCESSING_STATUSES.has(getDocumentStatus(selectedDocument))) return undefined
+
+    const interval = window.setInterval(() => {
+      loadChunkStats(selectedDocument.id, { silent: true })
+    }, 3000)
+
+    return () => window.clearInterval(interval)
+  }, [loadChunkStats, selectedDocument])
 
   useEffect(() => {
     const modalStatus = textPayload?.status || getDocumentStatus(selectedDocument)
@@ -456,6 +667,13 @@ export default function KnowledgeLibraryPage() {
     await loadDocumentText(document.id)
   }
 
+  async function handleOpenChunks(document) {
+    setChunksModalOpen(true)
+    setChunksPayload(null)
+    setChunksSearch('')
+    await loadDocumentChunks(document.id)
+  }
+
   async function handleReprocess(document) {
     setReprocessingId(document.id)
     setError('')
@@ -476,6 +694,12 @@ export default function KnowledgeLibraryPage() {
         })
         setTextSearch('')
       }
+      if (chunksModalOpen && selectedDocument?.id === updatedDocument.id) {
+        setChunksPayload(null)
+        setChunksSearch('')
+        setChunksError('')
+      }
+      setChunkStats(null)
     } catch (err) {
       const message = getApiError(err, 'Could not reprocess document.')
       if (textModalOpen) {
@@ -639,6 +863,14 @@ export default function KnowledgeLibraryPage() {
                     <button
                       type="button"
                       className="secondary-button py-2"
+                      onClick={() => handleOpenChunks(selectedDocument)}
+                    >
+                      <Layers className="h-4 w-4" />
+                      View Chunks
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary-button py-2"
                       onClick={() => handleReprocess(selectedDocument)}
                       disabled={
                         reprocessingId === selectedDocument.id ||
@@ -677,6 +909,8 @@ export default function KnowledgeLibraryPage() {
                     </button>
                   </div>
                 </div>
+
+                <DocumentAnalyticsCard loading={chunkStatsLoading} stats={chunkStats} />
 
                 {getDocumentStatus(selectedDocument) === 'failed' && (
                   <div className="mb-4 flex gap-3 rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-400/30 dark:bg-red-500/10 dark:text-red-100">
@@ -728,6 +962,18 @@ export default function KnowledgeLibraryPage() {
             query={textSearch}
             reprocessing={reprocessingId === selectedDocument.id}
             textPayload={textPayload}
+          />
+        )}
+
+        {chunksModalOpen && selectedDocument && (
+          <ChunksModal
+            chunksPayload={chunksPayload}
+            document={selectedDocument}
+            error={chunksError}
+            loading={chunksLoading}
+            onClose={() => setChunksModalOpen(false)}
+            onQueryChange={setChunksSearch}
+            query={chunksSearch}
           />
         )}
       </div>
