@@ -84,6 +84,34 @@ export async function sendConversationMessage(conversationId, content) {
   return data
 }
 
+export async function getKnowledgeDocuments() {
+  const { data } = await api.get('/knowledge/documents')
+  return data
+}
+
+export async function uploadKnowledgeDocument(file) {
+  const formData = new FormData()
+  formData.append('file', file)
+  const { data } = await api.post('/knowledge/documents', formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+  })
+  return data
+}
+
+export async function deleteKnowledgeDocument(documentId) {
+  const { data } = await api.delete(`/knowledge/documents/${documentId}`)
+  return data
+}
+
+export async function getKnowledgeDocumentPreview(documentId) {
+  const { data } = await api.get(`/knowledge/documents/${documentId}/preview`, {
+    responseType: 'blob',
+  })
+  return data
+}
+
 export async function askQuestion(question, sessionId) {
   const { data } = await api.post(
     '/ask',

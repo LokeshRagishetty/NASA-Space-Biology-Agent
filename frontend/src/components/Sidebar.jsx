@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import {
   Check,
   History,
+  Library,
   MessageSquare,
   Pencil,
   Plus,
@@ -69,10 +70,12 @@ export default function Sidebar({
   onClose,
 }) {
   const navigate = useNavigate()
+  const location = useLocation()
   const [search, setSearch] = useState('')
   const [renamingId, setRenamingId] = useState(null)
   const [draftTitle, setDraftTitle] = useState('')
   const debouncedSearch = useDebouncedValue(search.trim(), 220)
+  const libraryActive = location.pathname.startsWith('/app/library')
 
   const filteredHistory = useMemo(() => {
     if (!debouncedSearch) return history
@@ -151,6 +154,22 @@ export default function Sidebar({
         <button type="button" className="primary-button mb-4 w-full" onClick={onNewChat}>
           <Plus className="h-4 w-4" />
           New chat
+        </button>
+
+        <button
+          type="button"
+          className={`mb-4 flex w-full items-center gap-3 rounded-2xl border px-3 py-3 text-left text-sm font-semibold transition ${
+            libraryActive
+              ? 'border-sky-300 bg-sky-50 text-sky-800 dark:border-comet/40 dark:bg-comet/10 dark:text-comet'
+              : 'border-slate-200 bg-white text-slate-700 hover:border-sky-200 hover:bg-sky-50 dark:border-white/10 dark:bg-white/[0.04] dark:text-slate-200 dark:hover:bg-white/[0.08]'
+          }`}
+          onClick={() => {
+            navigate('/app/library')
+            onClose?.()
+          }}
+        >
+          <Library className="h-4 w-4" />
+          Knowledge Library
         </button>
 
         <label className="relative mb-4 block">
