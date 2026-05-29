@@ -10,7 +10,7 @@ from typing import Optional
 import markdown
 import requests
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile, status
+from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.security import OAuth2PasswordRequestForm
@@ -47,11 +47,17 @@ from schemas import (
     ConversationUpdate,
     GoogleLoginRequest,
     KnowledgeDocumentResponse,
+    KnowledgeDocumentTextResponse,
     MessageResponse,
     TokenResponse,
     UserCreate,
     UserLogin,
     UserProfile,
+)
+from services.document_processor import (
+    STATUS_PENDING,
+    process_document,
+    reset_document_processing_state,
 )
 
 load_dotenv()
@@ -93,6 +99,42 @@ def ensure_user_auth_columns() -> None:
             connection.execute(text(statement))
         connection.execute(
             text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_google_id ON users (google_id)")
+        )
+
+
+def ensure_knowledge_document_processing_columns() -> None:
+    """Lightweight migration for document extraction metadata."""
+    inspector = inspect(engine)
+    if "knowledge_documents" not in inspector.get_table_names():
+        return
+
+    columns = {column["name"] for column in inspector.get_columns("knowledge_documents")}
+    dialect = engine.dialect.name
+    datetime_type = "TIMESTAMP WITH TIME ZONE" if dialect == "postgresql" else "DATETIME"
+    statements = []
+
+    if "extracted_text" not in columns:
+        statements.append("ALTER TABLE knowledge_documents ADD COLUMN extracted_text TEXT")
+    if "processing_status" not in columns:
+        statements.append(
+            "ALTER TABLE knowledge_documents ADD COLUMN processing_status VARCHAR(20) NOT NULL DEFAULT 'pending'"
+        )
+    if "processed_at" not in columns:
+        statements.append(f"ALTER TABLE knowledge_documents ADD COLUMN processed_at {datetime_type}")
+    if "extraction_error" not in columns:
+        statements.append("ALTER TABLE knowledge_documents ADD COLUMN extraction_error TEXT")
+
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+        connection.execute(
+            text(
+                """
+                UPDATE knowledge_documents
+                SET processing_status = 'pending'
+                WHERE processing_status IS NULL OR processing_status = ''
+                """
+            )
         )
 
 
@@ -219,6 +261,7 @@ async def lifespan(app: FastAPI):
     ensure_upload_root()
     Base.metadata.create_all(bind=engine)
     ensure_user_auth_columns()
+    ensure_knowledge_document_processing_columns()
     migrate_legacy_chat_history()
     yield
 
@@ -721,6 +764,26 @@ def get_user_document(db: Session, current_user: User, document_id: int) -> Know
     return document
 
 
+def process_knowledge_document_task(document_id: int) -> None:
+    db = SessionLocal()
+    try:
+        process_document(db, document_id)
+    finally:
+        db.close()
+
+
+def build_document_text_response(document: KnowledgeDocument) -> KnowledgeDocumentTextResponse:
+    return KnowledgeDocumentTextResponse(
+        id=document.id,
+        filename=document.original_filename,
+        type=document.content_type,
+        status=document.processing_status or STATUS_PENDING,
+        text=document.extracted_text or "",
+        processed_at=document.processed_at,
+        extraction_error=document.extraction_error,
+    )
+
+
 @app.post(
     "/knowledge/documents",
     response_model=KnowledgeDocumentResponse,
@@ -728,6 +791,7 @@ def get_user_document(db: Session, current_user: User, document_id: int) -> Know
     tags=["knowledge-library"],
 )
 async def upload_knowledge_document(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -764,12 +828,14 @@ async def upload_knowledge_document(
         content_type=ALLOWED_UPLOADS[extension],
         file_extension=extension.lstrip("."),
         file_size=bytes_written,
+        processing_status=STATUS_PENDING,
     )
 
     try:
         db.add(document)
         db.commit()
         db.refresh(document)
+        background_tasks.add_task(process_knowledge_document_task, document.id)
         return document
     except SQLAlchemyError as exc:
         db.rollback()
@@ -808,6 +874,82 @@ def read_knowledge_document(
     db: Session = Depends(get_db),
 ):
     return get_user_document(db, current_user, document_id)
+
+
+@app.get(
+    "/knowledge/documents/{document_id}/text",
+    response_model=KnowledgeDocumentTextResponse,
+    tags=["knowledge-library"],
+)
+def read_knowledge_document_text(
+    document_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    document = get_user_document(db, current_user, document_id)
+    return build_document_text_response(document)
+
+
+@app.get(
+    "/documents/{document_id}/text",
+    response_model=KnowledgeDocumentTextResponse,
+    tags=["knowledge-library"],
+)
+def read_document_text(
+    document_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    document = get_user_document(db, current_user, document_id)
+    return build_document_text_response(document)
+
+
+@app.post(
+    "/knowledge/documents/{document_id}/reprocess",
+    response_model=KnowledgeDocumentResponse,
+    tags=["knowledge-library"],
+)
+def reprocess_knowledge_document(
+    document_id: int,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    document = get_user_document(db, current_user, document_id)
+    storage_path = Path(document.storage_path)
+    if not storage_path.exists() or not storage_path.is_file():
+        document.processing_status = "failed"
+        document.extraction_error = "Extraction failed because the stored file could not be found."
+        document.processed_at = utc_now()
+        db.commit()
+        db.refresh(document)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=document.extraction_error)
+
+    try:
+        reset_document_processing_state(db, document)
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not queue document processing.",
+        ) from exc
+
+    background_tasks.add_task(process_knowledge_document_task, document.id)
+    return document
+
+
+@app.post(
+    "/documents/{document_id}/reprocess",
+    response_model=KnowledgeDocumentResponse,
+    tags=["knowledge-library"],
+)
+def reprocess_document(
+    document_id: int,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return reprocess_knowledge_document(document_id, background_tasks, current_user, db)
 
 
 @app.get("/knowledge/documents/{document_id}/preview", tags=["knowledge-library"])

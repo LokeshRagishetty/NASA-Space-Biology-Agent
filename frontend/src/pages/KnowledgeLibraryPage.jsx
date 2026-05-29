@@ -3,23 +3,32 @@ import { useNavigate, useOutletContext } from 'react-router-dom'
 import {
   AlertCircle,
   Download,
+  FileSearch,
   FileImage,
   FileText,
   Library,
   Loader2,
+  RefreshCw,
+  Search,
   Trash2,
   Upload,
+  X,
 } from 'lucide-react'
 import PageTransition from '../components/PageTransition'
 import {
   deleteKnowledgeDocument,
   getApiError,
+  getKnowledgeDocumentText,
   getKnowledgeDocumentPreview,
   getKnowledgeDocuments,
+  reprocessKnowledgeDocument,
   uploadKnowledgeDocument,
 } from '../services/api'
 
 const ACCEPTED_TYPES = '.pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg'
+const ALLOWED_EXTENSIONS = new Set(['pdf', 'png', 'jpg', 'jpeg'])
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+const ACTIVE_PROCESSING_STATUSES = new Set(['pending', 'processing'])
 
 function formatBytes(bytes) {
   if (!Number.isFinite(bytes)) return '0 B'
@@ -49,6 +58,47 @@ function formatDate(value) {
   }
 }
 
+function formatDocumentType(document) {
+  if (!document) return ''
+  if (document.content_type === 'application/pdf' || document.type === 'application/pdf') return 'PDF'
+  const extension = document.file_extension || document.type?.split('/').pop() || ''
+  return extension ? extension.toUpperCase() : 'Document'
+}
+
+function getDocumentStatus(document) {
+  return document?.processing_status || document?.status || 'pending'
+}
+
+function buildHighlightedSegments(text, query) {
+  const search = query.trim()
+  if (!search || !text) {
+    return { count: 0, segments: [{ text, match: false }] }
+  }
+
+  const segments = []
+  const lowerText = text.toLowerCase()
+  const lowerSearch = search.toLowerCase()
+  let cursor = 0
+  let count = 0
+
+  while (cursor < text.length) {
+    const index = lowerText.indexOf(lowerSearch, cursor)
+    if (index === -1) break
+    if (index > cursor) {
+      segments.push({ text: text.slice(cursor, index), match: false })
+    }
+    segments.push({ text: text.slice(index, index + search.length), match: true })
+    count += 1
+    cursor = index + search.length
+  }
+
+  if (cursor < text.length) {
+    segments.push({ text: text.slice(cursor), match: false })
+  }
+
+  return { count, segments }
+}
+
 function DocumentIcon({ document }) {
   const isPdf = document.content_type === 'application/pdf'
   const Icon = isPdf ? FileText : FileImage
@@ -56,6 +106,162 @@ function DocumentIcon({ document }) {
     <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-sky-50 text-sky-700 ring-1 ring-sky-100 dark:bg-comet/10 dark:text-comet dark:ring-comet/20">
       <Icon className="h-5 w-5" />
     </span>
+  )
+}
+
+function ProcessingStatusBadge({ status }) {
+  const normalizedStatus = status || 'pending'
+  const badgeConfig = {
+    pending: {
+      label: 'Processing',
+      className:
+        'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-300/25 dark:bg-amber-400/10 dark:text-amber-100',
+      active: true,
+    },
+    processing: {
+      label: 'Processing',
+      className:
+        'border-sky-200 bg-sky-50 text-sky-700 dark:border-comet/25 dark:bg-comet/10 dark:text-comet',
+      active: true,
+    },
+    completed: {
+      label: 'Completed',
+      className:
+        'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-300/25 dark:bg-emerald-400/10 dark:text-emerald-100',
+      active: false,
+    },
+    failed: {
+      label: 'Failed',
+      className:
+        'border-red-200 bg-red-50 text-red-700 dark:border-red-300/25 dark:bg-red-400/10 dark:text-red-100',
+      active: false,
+    },
+  }
+  const config = badgeConfig[normalizedStatus] || badgeConfig.pending
+
+  return (
+    <span
+      className={`inline-flex h-7 shrink-0 items-center gap-1 rounded-full border px-2.5 text-xs font-semibold ${config.className}`}
+    >
+      {config.active && <Loader2 className="h-3 w-3 animate-spin" />}
+      {config.label}
+    </span>
+  )
+}
+
+function ExtractedTextModal({
+  document,
+  error,
+  loading,
+  onClose,
+  onQueryChange,
+  onRetry,
+  query,
+  reprocessing,
+  textPayload,
+}) {
+  const text = textPayload?.text || ''
+  const status = textPayload?.status || getDocumentStatus(document)
+  const extractionError = textPayload?.extraction_error || document?.extraction_error || ''
+  const { count, segments } = useMemo(() => buildHighlightedSegments(text, query), [query, text])
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-3 backdrop-blur-sm sm:p-6">
+      <div className="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl dark:border-white/10 dark:bg-slate-950">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-200 p-4 dark:border-white/10 sm:p-5">
+          <div className="min-w-0">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <ProcessingStatusBadge status={status} />
+              <span className="rounded-full border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-500 dark:border-white/10 dark:text-slate-300">
+                {formatDocumentType(textPayload || document)}
+              </span>
+            </div>
+            <h2 className="truncate text-base font-semibold text-slate-950 dark:text-white sm:text-lg">
+              {textPayload?.filename || document?.original_filename}
+            </h2>
+          </div>
+
+          <button type="button" className="icon-button shrink-0" onClick={onClose} aria-label="Close extracted text">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="border-b border-slate-200 p-4 dark:border-white/10 sm:p-5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <label className="relative min-w-0 flex-1">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <input
+                className="field rounded-xl py-2 pl-9"
+                type="search"
+                placeholder="Search extracted text"
+                value={query}
+                onChange={(event) => onQueryChange(event.target.value)}
+                disabled={!text}
+              />
+            </label>
+            <div className="flex shrink-0 items-center gap-2">
+              <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                {query.trim() ? `${count} match${count === 1 ? '' : 'es'}` : `${text.length.toLocaleString()} chars`}
+              </span>
+              <button
+                type="button"
+                className="secondary-button py-2"
+                onClick={onRetry}
+                disabled={reprocessing || ACTIVE_PROCESSING_STATUSES.has(status)}
+              >
+                {reprocessing ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-4 w-4" />
+                )}
+                Reprocess
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {error && (
+          <div className="mx-4 mt-4 flex gap-3 rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-400/30 dark:bg-red-500/10 dark:text-red-100 sm:mx-5">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        <div className="min-h-[360px] overflow-auto p-4 sm:p-5">
+          {loading ? (
+            <div className="flex min-h-[320px] items-center justify-center gap-2 text-sm text-slate-500">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading extracted text
+            </div>
+          ) : ACTIVE_PROCESSING_STATUSES.has(status) ? (
+            <div className="flex min-h-[320px] items-center justify-center gap-2 text-sm text-slate-500">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Extraction is processing.
+            </div>
+          ) : status === 'failed' ? (
+            <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-400/30 dark:bg-red-500/10 dark:text-red-100">
+              {extractionError || 'Extraction failed. Reprocess the document to try again.'}
+            </div>
+          ) : text ? (
+            <pre className="whitespace-pre-wrap break-words rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm leading-6 text-slate-800 dark:border-white/10 dark:bg-white/[0.04] dark:text-slate-100">
+              {segments.map((segment, index) =>
+                segment.match ? (
+                  <mark key={index} className="rounded bg-amber-200 px-0.5 text-slate-950">
+                    {segment.text}
+                  </mark>
+                ) : (
+                  <span key={index}>{segment.text}</span>
+                ),
+              )}
+            </pre>
+          ) : (
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500 dark:border-white/10 dark:bg-white/[0.04] dark:text-slate-300">
+              No extracted text was found in this file.
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -70,6 +276,12 @@ export default function KnowledgeLibraryPage() {
   const [uploading, setUploading] = useState(false)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [deletingId, setDeletingId] = useState(null)
+  const [reprocessingId, setReprocessingId] = useState(null)
+  const [textModalOpen, setTextModalOpen] = useState(false)
+  const [textPayload, setTextPayload] = useState(null)
+  const [textLoading, setTextLoading] = useState(false)
+  const [textError, setTextError] = useState('')
+  const [textSearch, setTextSearch] = useState('')
   const [error, setError] = useState('')
 
   const selectedDocument = useMemo(
@@ -77,9 +289,16 @@ export default function KnowledgeLibraryPage() {
     [documents, selectedDocumentId],
   )
 
-  const loadDocuments = useCallback(async () => {
-    setLoading(true)
-    setError('')
+  const hasActiveProcessing = useMemo(
+    () => documents.some((document) => ACTIVE_PROCESSING_STATUSES.has(getDocumentStatus(document))),
+    [documents],
+  )
+
+  const loadDocuments = useCallback(async ({ silent = false } = {}) => {
+    if (!silent) {
+      setLoading(true)
+      setError('')
+    }
 
     try {
       const data = await getKnowledgeDocuments()
@@ -89,9 +308,33 @@ export default function KnowledgeLibraryPage() {
         return data[0]?.id || null
       })
     } catch (err) {
-      setError(getApiError(err, 'Could not load knowledge documents.'))
+      if (!silent) {
+        setError(getApiError(err, 'Could not load knowledge documents.'))
+      }
     } finally {
-      setLoading(false)
+      if (!silent) {
+        setLoading(false)
+      }
+    }
+  }, [])
+
+  const loadDocumentText = useCallback(async (documentId, { silent = false } = {}) => {
+    if (!silent) {
+      setTextLoading(true)
+      setTextError('')
+    }
+
+    try {
+      const data = await getKnowledgeDocumentText(documentId)
+      setTextPayload(data)
+    } catch (err) {
+      if (!silent) {
+        setTextError(getApiError(err, 'Could not load extracted text.'))
+      }
+    } finally {
+      if (!silent) {
+        setTextLoading(false)
+      }
     }
   }, [])
 
@@ -113,6 +356,27 @@ export default function KnowledgeLibraryPage() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     loadDocuments()
   }, [loadDocuments])
+
+  useEffect(() => {
+    if (!hasActiveProcessing) return undefined
+
+    const interval = window.setInterval(() => {
+      loadDocuments({ silent: true })
+    }, 3000)
+
+    return () => window.clearInterval(interval)
+  }, [hasActiveProcessing, loadDocuments])
+
+  useEffect(() => {
+    const modalStatus = textPayload?.status || getDocumentStatus(selectedDocument)
+    if (!textModalOpen || !selectedDocument || !ACTIVE_PROCESSING_STATUSES.has(modalStatus)) return undefined
+
+    const interval = window.setInterval(() => {
+      loadDocumentText(selectedDocument.id, { silent: true })
+    }, 3000)
+
+    return () => window.clearInterval(interval)
+  }, [loadDocumentText, selectedDocument, textModalOpen, textPayload?.status])
 
   useEffect(() => {
     let objectUrl = ''
@@ -155,6 +419,20 @@ export default function KnowledgeLibraryPage() {
   async function handleUpload(event) {
     const file = event.target.files?.[0]
     if (!file) return
+    const input = event.target
+    const extension = file.name.split('.').pop()?.toLowerCase() || ''
+
+    if (!ALLOWED_EXTENSIONS.has(extension)) {
+      setError('Unsupported file. Upload a PDF, PNG, JPG, or JPEG file.')
+      input.value = ''
+      return
+    }
+
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setError('File is too large. Maximum upload size is 25 MB.')
+      input.value = ''
+      return
+    }
 
     setUploading(true)
     setError('')
@@ -163,11 +441,50 @@ export default function KnowledgeLibraryPage() {
       const document = await uploadKnowledgeDocument(file)
       setDocuments((current) => [document, ...current])
       setSelectedDocumentId(document.id)
-      event.target.value = ''
     } catch (err) {
       setError(getApiError(err, 'Upload failed.'))
     } finally {
       setUploading(false)
+      input.value = ''
+    }
+  }
+
+  async function handleOpenExtractedText(document) {
+    setTextModalOpen(true)
+    setTextPayload(null)
+    setTextSearch('')
+    await loadDocumentText(document.id)
+  }
+
+  async function handleReprocess(document) {
+    setReprocessingId(document.id)
+    setError('')
+    setTextError('')
+
+    try {
+      const updatedDocument = await reprocessKnowledgeDocument(document.id)
+      setDocuments((current) => current.map((item) => (item.id === updatedDocument.id ? updatedDocument : item)))
+      if (textModalOpen && selectedDocument?.id === updatedDocument.id) {
+        setTextPayload({
+          id: updatedDocument.id,
+          filename: updatedDocument.original_filename,
+          type: updatedDocument.content_type,
+          status: updatedDocument.processing_status,
+          text: '',
+          processed_at: updatedDocument.processed_at,
+          extraction_error: updatedDocument.extraction_error,
+        })
+        setTextSearch('')
+      }
+    } catch (err) {
+      const message = getApiError(err, 'Could not reprocess document.')
+      if (textModalOpen) {
+        setTextError(message)
+      } else {
+        setError(message)
+      }
+    } finally {
+      setReprocessingId(null)
     }
   }
 
@@ -270,16 +587,19 @@ export default function KnowledgeLibraryPage() {
                       onClick={() => setSelectedDocumentId(document.id)}
                     >
                       <DocumentIcon document={document} />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-medium text-slate-900 dark:text-slate-100">
-                          {document.original_filename}
+                      <span className="flex min-w-0 flex-1 items-start justify-between gap-2">
+                        <span className="min-w-0">
+                          <span className="block truncate text-sm font-medium text-slate-900 dark:text-slate-100">
+                            {document.original_filename}
+                          </span>
+                          <span className="mt-1 block text-xs text-slate-500">
+                            {formatBytes(document.file_size)} · {document.file_extension.toUpperCase()}
+                          </span>
+                          <span className="mt-1 block text-xs text-slate-400 dark:text-slate-500">
+                            {formatDate(document.uploaded_at)}
+                          </span>
                         </span>
-                        <span className="mt-1 block text-xs text-slate-500">
-                          {formatBytes(document.file_size)} · {document.file_extension.toUpperCase()}
-                        </span>
-                        <span className="mt-1 block text-xs text-slate-400 dark:text-slate-500">
-                          {formatDate(document.uploaded_at)}
-                        </span>
+                        <ProcessingStatusBadge status={getDocumentStatus(document)} />
                       </span>
                     </button>
                   )
@@ -298,13 +618,40 @@ export default function KnowledgeLibraryPage() {
                       <h2 className="truncate text-base font-semibold text-slate-950 dark:text-white">
                         {selectedDocument.original_filename}
                       </h2>
-                      <p className="text-xs text-slate-500">
-                        {formatBytes(selectedDocument.file_size)} · uploaded {formatDate(selectedDocument.uploaded_at)}
-                      </p>
+                      <div className="mt-1 flex flex-wrap items-center gap-2">
+                        <ProcessingStatusBadge status={getDocumentStatus(selectedDocument)} />
+                        <p className="text-xs text-slate-500">
+                          {formatBytes(selectedDocument.file_size)} · uploaded {formatDate(selectedDocument.uploaded_at)}
+                        </p>
+                      </div>
                     </div>
                   </div>
 
-                  <div className="flex shrink-0 items-center gap-2">
+                  <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      className="secondary-button py-2"
+                      onClick={() => handleOpenExtractedText(selectedDocument)}
+                    >
+                      <FileSearch className="h-4 w-4" />
+                      View Extracted Text
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary-button py-2"
+                      onClick={() => handleReprocess(selectedDocument)}
+                      disabled={
+                        reprocessingId === selectedDocument.id ||
+                        ACTIVE_PROCESSING_STATUSES.has(getDocumentStatus(selectedDocument))
+                      }
+                    >
+                      {reprocessingId === selectedDocument.id ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <RefreshCw className="h-4 w-4" />
+                      )}
+                      Reprocess
+                    </button>
                     {previewUrl && (
                       <a
                         className="secondary-button py-2"
@@ -330,6 +677,13 @@ export default function KnowledgeLibraryPage() {
                     </button>
                   </div>
                 </div>
+
+                {getDocumentStatus(selectedDocument) === 'failed' && (
+                  <div className="mb-4 flex gap-3 rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-400/30 dark:bg-red-500/10 dark:text-red-100">
+                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span>{selectedDocument.extraction_error || 'Extraction failed. Reprocess the document to try again.'}</span>
+                  </div>
+                )}
 
                 <div className="relative min-h-0 flex-1 overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 dark:border-white/10 dark:bg-slate-950/40">
                   {previewLoading ? (
@@ -362,6 +716,20 @@ export default function KnowledgeLibraryPage() {
             )}
           </div>
         </section>
+
+        {textModalOpen && selectedDocument && (
+          <ExtractedTextModal
+            document={selectedDocument}
+            error={textError}
+            loading={textLoading}
+            onClose={() => setTextModalOpen(false)}
+            onQueryChange={setTextSearch}
+            onRetry={() => handleReprocess(selectedDocument)}
+            query={textSearch}
+            reprocessing={reprocessingId === selectedDocument.id}
+            textPayload={textPayload}
+          />
+        )}
       </div>
     </PageTransition>
   )

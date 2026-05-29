@@ -16,3 +16,5 @@ passlib[bcrypt]
 python-jose
 python-multipart
 bcrypt
+PyMuPDF
+easyocr
