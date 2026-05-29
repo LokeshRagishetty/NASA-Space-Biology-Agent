@@ -9,6 +9,7 @@ import LoginPage from './pages/LoginPage'
 import SignupPage from './pages/SignupPage'
 import ForgotPasswordPage from './pages/ForgotPasswordPage'
 import DashboardPage from './pages/DashboardPage'
+import KnowledgeLibraryPage from './pages/KnowledgeLibraryPage'
 import NotFoundPage from './pages/NotFoundPage'
 
 function AnimatedRoutes() {
@@ -53,6 +54,7 @@ function AnimatedRoutes() {
           }
         >
           <Route index element={<DashboardPage />} />
+          <Route path="library" element={<KnowledgeLibraryPage />} />
         </Route>
 
         <Route path="*" element={<NotFoundPage />} />

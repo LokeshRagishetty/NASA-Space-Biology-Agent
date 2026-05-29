@@ -4,14 +4,15 @@ import re
 import secrets
 from contextlib import asynccontextmanager
 from datetime import timedelta
+from pathlib import Path
 from typing import Optional
 
 import markdown
 import requests
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.staticfiles import StaticFiles
 from langchain_community.chat_message_histories import ChatMessageHistory
@@ -34,7 +35,7 @@ from auth import (
     verify_firebase_id_token,
 )
 from database import Base, SessionLocal, engine, get_db
-from models import ChatHistory, Conversation, Message, User, utc_now
+from models import ChatHistory, Conversation, KnowledgeDocument, Message, User, utc_now
 from schemas import (
     ChatHistoryResponse,
     ChatRequest,
@@ -45,6 +46,7 @@ from schemas import (
     ConversationSendResponse,
     ConversationUpdate,
     GoogleLoginRequest,
+    KnowledgeDocumentResponse,
     MessageResponse,
     TokenResponse,
     UserCreate,
@@ -57,6 +59,15 @@ load_dotenv()
 # Validate keys at startup so deployment issues fail loudly.
 assert os.getenv("GROQ_API_KEY"), "Missing GROQ_API_KEY in .env"
 assert os.getenv("NASA_ADS_TOKEN"), "Missing NASA_ADS_TOKEN in .env"
+
+UPLOAD_ROOT = Path(os.getenv("KNOWLEDGE_UPLOAD_DIR", "uploads/knowledge_library")).resolve()
+MAX_UPLOAD_BYTES = int(os.getenv("KNOWLEDGE_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
+ALLOWED_UPLOADS = {
+    ".pdf": "application/pdf",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+}
 
 
 def ensure_user_auth_columns() -> None:
@@ -97,6 +108,35 @@ def generate_conversation_title(prompt: str) -> str:
     if len(words) > 8 or len(title) > 64:
         title = title[:64].rstrip(" ,.;:-") + "..."
     return title[:140]
+
+
+def ensure_upload_root() -> None:
+    UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
+
+
+def clean_upload_filename(filename: str) -> str:
+    name = Path(filename or "document").name
+    cleaned = re.sub(r"[^A-Za-z0-9_. -]+", "_", name).strip(" .")
+    return cleaned or "document"
+
+
+def validate_upload_file(upload: UploadFile) -> tuple[str, str]:
+    original_name = clean_upload_filename(upload.filename or "")
+    extension = Path(original_name).suffix.lower()
+    if extension not in ALLOWED_UPLOADS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only PDF, PNG, JPG, and JPEG files are supported.",
+        )
+
+    expected_content_type = ALLOWED_UPLOADS[extension]
+    if upload.content_type and upload.content_type not in {expected_content_type, "application/octet-stream"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded file type does not match the selected file extension.",
+        )
+
+    return original_name, extension
 
 
 def migrate_legacy_chat_history() -> None:
@@ -176,6 +216,7 @@ def migrate_legacy_chat_history() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # For SQLite/simple deployments. Use Alembic migrations before a large production launch.
+    ensure_upload_root()
     Base.metadata.create_all(bind=engine)
     ensure_user_auth_columns()
     migrate_legacy_chat_history()
@@ -664,6 +705,151 @@ def hydrate_agent_session(session_id: str, messages: list[Message]) -> None:
             history.add_user_message(message.content)
         elif message.role == "assistant":
             history.add_ai_message(message.content)
+
+
+def get_user_document(db: Session, current_user: User, document_id: int) -> KnowledgeDocument:
+    document = (
+        db.query(KnowledgeDocument)
+        .filter(
+            KnowledgeDocument.id == document_id,
+            KnowledgeDocument.user_id == current_user.id,
+        )
+        .first()
+    )
+    if document is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found.")
+    return document
+
+
+@app.post(
+    "/knowledge/documents",
+    response_model=KnowledgeDocumentResponse,
+    status_code=status.HTTP_201_CREATED,
+    tags=["knowledge-library"],
+)
+async def upload_knowledge_document(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    original_name, extension = validate_upload_file(file)
+    ensure_upload_root()
+
+    user_directory = UPLOAD_ROOT / str(current_user.id)
+    user_directory.mkdir(parents=True, exist_ok=True)
+    stored_filename = f"{secrets.token_hex(16)}{extension}"
+    storage_path = user_directory / stored_filename
+    bytes_written = 0
+
+    try:
+        with storage_path.open("wb") as buffer:
+            while chunk := await file.read(1024 * 1024):
+                bytes_written += len(chunk)
+                if bytes_written > MAX_UPLOAD_BYTES:
+                    buffer.close()
+                    storage_path.unlink(missing_ok=True)
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail=f"File is too large. Maximum upload size is {MAX_UPLOAD_BYTES // (1024 * 1024)} MB.",
+                    )
+                buffer.write(chunk)
+    finally:
+        await file.close()
+
+    document = KnowledgeDocument(
+        user_id=current_user.id,
+        original_filename=original_name,
+        stored_filename=stored_filename,
+        storage_path=str(storage_path),
+        content_type=ALLOWED_UPLOADS[extension],
+        file_extension=extension.lstrip("."),
+        file_size=bytes_written,
+    )
+
+    try:
+        db.add(document)
+        db.commit()
+        db.refresh(document)
+        return document
+    except SQLAlchemyError as exc:
+        db.rollback()
+        storage_path.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not save document metadata.",
+        ) from exc
+
+
+@app.get("/knowledge/documents", response_model=list[KnowledgeDocumentResponse], tags=["knowledge-library"])
+def list_knowledge_documents(
+    limit: int = Query(80, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return (
+        db.query(KnowledgeDocument)
+        .filter(KnowledgeDocument.user_id == current_user.id)
+        .order_by(KnowledgeDocument.uploaded_at.desc(), KnowledgeDocument.id.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
+
+@app.get(
+    "/knowledge/documents/{document_id}",
+    response_model=KnowledgeDocumentResponse,
+    tags=["knowledge-library"],
+)
+def read_knowledge_document(
+    document_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return get_user_document(db, current_user, document_id)
+
+
+@app.get("/knowledge/documents/{document_id}/preview", tags=["knowledge-library"])
+def preview_knowledge_document(
+    document_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    document = get_user_document(db, current_user, document_id)
+    path = Path(document.storage_path)
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Stored file not found.")
+
+    return FileResponse(
+        path,
+        media_type=document.content_type,
+        filename=document.original_filename,
+        content_disposition_type="inline",
+    )
+
+
+@app.delete("/knowledge/documents/{document_id}", response_model=MessageResponse, tags=["knowledge-library"])
+def delete_knowledge_document(
+    document_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    document = get_user_document(db, current_user, document_id)
+    storage_path = Path(document.storage_path)
+
+    try:
+        db.delete(document)
+        db.commit()
+        storage_path.unlink(missing_ok=True)
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not delete document metadata.",
+        ) from exc
+
+    return {"message": "Document deleted."}
 
 
 @app.post(

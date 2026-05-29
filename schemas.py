@@ -154,3 +154,15 @@ class ConversationSendResponse(BaseModel):
     conversation: ConversationResponse
     user_message: ConversationMessageResponse
     assistant_message: ConversationMessageResponse
+
+
+class KnowledgeDocumentResponse(BaseModel):
+    id: int
+    user_id: int
+    original_filename: str
+    content_type: str
+    file_extension: str
+    file_size: int
+    uploaded_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
