@@ -112,6 +112,16 @@ export async function getKnowledgeDocumentPreview(documentId) {
   return data
 }
 
+export async function getKnowledgeDocumentText(documentId) {
+  const { data } = await api.get(`/knowledge/documents/${documentId}/text`)
+  return data
+}
+
+export async function reprocessKnowledgeDocument(documentId) {
+  const { data } = await api.post(`/knowledge/documents/${documentId}/reprocess`)
+  return data
+}
+
 export async function askQuestion(question, sessionId) {
   const { data } = await api.post(
     '/ask',

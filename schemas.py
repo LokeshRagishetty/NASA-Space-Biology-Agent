@@ -156,6 +156,9 @@ class ConversationSendResponse(BaseModel):
     assistant_message: ConversationMessageResponse
 
 
+KnowledgeProcessingStatus = Literal["pending", "processing", "completed", "failed"]
+
+
 class KnowledgeDocumentResponse(BaseModel):
     id: int
     user_id: int
@@ -164,5 +167,18 @@ class KnowledgeDocumentResponse(BaseModel):
     file_extension: str
     file_size: int
     uploaded_at: datetime
+    processing_status: KnowledgeProcessingStatus = "pending"
+    processed_at: Optional[datetime] = None
+    extraction_error: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class KnowledgeDocumentTextResponse(BaseModel):
+    id: int
+    filename: str
+    type: str
+    status: KnowledgeProcessingStatus
+    text: str = ""
+    processed_at: Optional[datetime] = None
+    extraction_error: Optional[str] = None
