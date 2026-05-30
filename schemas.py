@@ -219,3 +219,22 @@ class DocumentEmbeddingStatsResponse(BaseModel):
     chunk_count: int
     embedding_count: int
     embedding_dimension: int
+
+
+class VectorStoreStatsResponse(BaseModel):
+    collection_name: str
+    total_vectors: int
+    total_documents: int
+
+
+class DocumentVectorStatsResponse(BaseModel):
+    document_id: int
+    chunk_count: int
+    embedding_count: int
+    stored_vectors: int
+
+
+class VectorStoreHealthResponse(BaseModel):
+    status: str
+    collection: str
+    detail: Optional[str] = None

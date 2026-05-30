@@ -7,6 +7,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from models import ChunkEmbedding, DocumentChunk, KnowledgeDocument
+from services.vector_store import delete_document_vectors, sync_document_vectors
 
 
 EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
@@ -146,10 +147,12 @@ def sync_document_embeddings(db: Session, document: KnowledgeDocument, force: bo
     chunks = list_document_chunks_for_embeddings(db, document.id)
     if not chunks:
         delete_document_embeddings(db, document.id)
+        delete_document_vectors(document.id)
         db.flush()
         return get_document_embedding_statistics(db, document)
 
     if not force and _document_embeddings_are_current(db, document.id, len(chunks)):
+        sync_document_vectors(db, document)
         return get_document_embedding_statistics(db, document)
 
     return regenerate_document_embeddings(db, document, chunks=chunks)
@@ -164,6 +167,7 @@ def regenerate_document_embeddings(
     delete_document_embeddings(db, document.id)
 
     if not chunk_records:
+        delete_document_vectors(document.id)
         db.flush()
         return get_document_embedding_statistics(db, document)
 
@@ -192,6 +196,7 @@ def regenerate_document_embeddings(
 
     db.add_all(embedding_records)
     db.flush()
+    sync_document_vectors(db, document, force=True)
     return get_document_embedding_statistics(db, document)
 
 

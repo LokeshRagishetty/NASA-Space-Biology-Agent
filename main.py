@@ -12,7 +12,7 @@ import requests
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.staticfiles import StaticFiles
 from langchain_community.chat_message_histories import ChatMessageHistory
@@ -48,6 +48,7 @@ from schemas import (
     DocumentChunksResponse,
     DocumentChunkStatsResponse,
     DocumentEmbeddingStatsResponse,
+    DocumentVectorStatsResponse,
     GoogleLoginRequest,
     KnowledgeDocumentResponse,
     KnowledgeDocumentTextResponse,
@@ -56,6 +57,8 @@ from schemas import (
     UserCreate,
     UserLogin,
     UserProfile,
+    VectorStoreHealthResponse,
+    VectorStoreStatsResponse,
 )
 from services.chunking_service import get_document_chunk_statistics, list_document_chunks
 from services.document_processor import (
@@ -70,6 +73,16 @@ from services.embedding_service import (
     EmbeddingServiceError,
     get_document_embedding_statistics,
     regenerate_document_embeddings,
+)
+from services.vector_store import (
+    COLLECTION_NAME,
+    VectorStoreError,
+    delete_document_vectors,
+    get_collection_statistics,
+    get_document_vector_statistics,
+    health_check as vector_store_health_check,
+    initialize_vector_store,
+    sync_document_vectors,
 )
 
 load_dotenv()
@@ -290,6 +303,11 @@ async def lifespan(app: FastAPI):
     ensure_knowledge_document_processing_columns()
     ensure_document_chunk_table()
     ensure_chunk_embedding_table()
+    try:
+        initialize_vector_store()
+        app.state.vector_store_startup_error = None
+    except VectorStoreError as exc:
+        app.state.vector_store_startup_error = str(exc)
     migrate_legacy_chat_history()
     yield
 
@@ -858,6 +876,14 @@ def build_embedding_http_exception(exc: EmbeddingServiceError) -> HTTPException:
     return HTTPException(status_code=exc.status_code, detail=str(exc))
 
 
+def build_document_vector_stats_response(db: Session, document: KnowledgeDocument) -> DocumentVectorStatsResponse:
+    return DocumentVectorStatsResponse(**get_document_vector_statistics(db, document))
+
+
+def build_vector_store_http_exception(exc: VectorStoreError) -> HTTPException:
+    return HTTPException(status_code=exc.status_code, detail=str(exc))
+
+
 @app.post(
     "/knowledge/documents",
     response_model=KnowledgeDocumentResponse,
@@ -1062,6 +1088,74 @@ def read_document_embedding_stats(
     return build_document_embedding_stats_response(db, document)
 
 
+@app.get(
+    "/vector-store/stats",
+    response_model=VectorStoreStatsResponse,
+    tags=["vector-store"],
+)
+def read_vector_store_stats(current_user: User = Depends(get_current_user)):
+    try:
+        return VectorStoreStatsResponse(**get_collection_statistics())
+    except VectorStoreError as exc:
+        raise build_vector_store_http_exception(exc) from exc
+
+
+@app.get(
+    "/documents/{document_id}/vector-stats",
+    response_model=DocumentVectorStatsResponse,
+    tags=["vector-store"],
+)
+def read_document_vector_stats(
+    document_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    document = get_user_document(db, current_user, document_id)
+    try:
+        return build_document_vector_stats_response(db, document)
+    except VectorStoreError as exc:
+        raise build_vector_store_http_exception(exc) from exc
+
+
+@app.post(
+    "/documents/{document_id}/sync-vectors",
+    response_model=DocumentVectorStatsResponse,
+    tags=["vector-store"],
+)
+def sync_document_vectors_endpoint(
+    document_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    document = get_user_document(db, current_user, document_id)
+    ensure_document_chunks_available(document)
+
+    try:
+        stats = sync_document_vectors(db, document, force=True)
+        return DocumentVectorStatsResponse(**stats)
+    except VectorStoreError as exc:
+        raise build_vector_store_http_exception(exc) from exc
+
+
+@app.get(
+    "/vector-store/health",
+    response_model=VectorStoreHealthResponse,
+    tags=["vector-store"],
+)
+def read_vector_store_health():
+    try:
+        return VectorStoreHealthResponse(**vector_store_health_check())
+    except VectorStoreError as exc:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={
+                "status": "unhealthy",
+                "collection": COLLECTION_NAME,
+                "detail": str(exc),
+            },
+        )
+
+
 @app.post(
     "/knowledge/documents/{document_id}/regenerate-embeddings",
     response_model=DocumentEmbeddingStatsResponse,
@@ -1082,6 +1176,9 @@ def regenerate_knowledge_document_embeddings(
     except EmbeddingServiceError as exc:
         db.rollback()
         raise build_embedding_http_exception(exc) from exc
+    except VectorStoreError as exc:
+        db.rollback()
+        raise build_vector_store_http_exception(exc) from exc
     except SQLAlchemyError as exc:
         db.rollback()
         raise HTTPException(
@@ -1180,9 +1277,13 @@ def delete_knowledge_document(
     storage_path = Path(document.storage_path)
 
     try:
+        delete_document_vectors(document.id)
         db.delete(document)
         db.commit()
         storage_path.unlink(missing_ok=True)
+    except VectorStoreError as exc:
+        db.rollback()
+        raise build_vector_store_http_exception(exc) from exc
     except SQLAlchemyError as exc:
         db.rollback()
         raise HTTPException(
