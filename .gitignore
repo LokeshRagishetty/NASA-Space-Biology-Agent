@@ -10,4 +10,5 @@ node_modules/
 dist/
 uploads/
 *.log
-EOFvector_store/
+vector_store/
+EOF

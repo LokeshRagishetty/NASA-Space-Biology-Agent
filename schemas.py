@@ -238,3 +238,43 @@ class VectorStoreHealthResponse(BaseModel):
     status: str
     collection: str
     detail: Optional[str] = None
+
+
+class SearchRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=4000)
+    top_k: Optional[int] = Field(default=None, ge=1, le=20)
+
+    @field_validator("query")
+    @classmethod
+    def clean_query(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Search query cannot be empty or whitespace only.")
+        return cleaned
+
+
+class SearchResultItem(BaseModel):
+    document_id: int
+    chunk_id: int
+    filename: str
+    chunk_text: str
+    similarity_score: float = Field(..., ge=0.0, le=1.0)
+    chunk_index: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SearchResponse(BaseModel):
+    query: str
+    results: list[SearchResultItem] = Field(default_factory=list)
+    total_results: int
+    search_time_ms: float
+    highest_similarity_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+
+
+class SearchStatisticsResponse(BaseModel):
+    documents_count: int
+    chunks_count: int
+    embeddings_count: int
+    searchable: bool
+

@@ -162,6 +162,21 @@ export async function syncKnowledgeDocumentVectors(documentId) {
   return data
 }
 
+export async function performSemanticSearch(query, topK) {
+  const { data } = await api.post('/search', { query, top_k: topK })
+  return data
+}
+
+export async function performDocumentSemanticSearch(documentId, query, topK) {
+  const { data } = await api.post(`/documents/${documentId}/search`, { query, top_k: topK })
+  return data
+}
+
+export async function getSearchStatistics() {
+  const { data } = await api.get('/search-statistics')
+  return data
+}
+
 export async function askQuestion(question, sessionId) {
   const { data } = await api.post(
     '/ask',
