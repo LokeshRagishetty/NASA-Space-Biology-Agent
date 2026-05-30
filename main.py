@@ -53,6 +53,9 @@ from schemas import (
     KnowledgeDocumentResponse,
     KnowledgeDocumentTextResponse,
     MessageResponse,
+    SearchRequest,
+    SearchResponse,
+    SearchStatisticsResponse,
     TokenResponse,
     UserCreate,
     UserLogin,
@@ -73,6 +76,11 @@ from services.embedding_service import (
     EmbeddingServiceError,
     get_document_embedding_statistics,
     regenerate_document_embeddings,
+)
+from services.semantic_search import (
+    SemanticSearchError,
+    search_documents,
+    get_search_statistics,
 )
 from services.vector_store import (
     COLLECTION_NAME,
@@ -1292,6 +1300,128 @@ def delete_knowledge_document(
         ) from exc
 
     return {"message": "Document deleted."}
+
+
+# ============================================================================
+# SEMANTIC SEARCH ENDPOINTS
+# ============================================================================
+
+
+@app.post(
+    "/search",
+    response_model=SearchResponse,
+    tags=["semantic-search"],
+)
+def perform_semantic_search(
+    payload: SearchRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Perform semantic search across all user's documents.
+
+    Searches document chunks using semantic similarity to find relevant content.
+    Results are automatically filtered to show only the current user's documents.
+    """
+    try:
+        response = search_documents(
+            db=db,
+            query=payload.query,
+            user_id=current_user.id,
+            top_k=payload.top_k,
+        )
+        return SearchResponse(
+            query=response.query,
+            results=[
+                {
+                    "document_id": r.document_id,
+                    "chunk_id": r.chunk_id,
+                    "filename": r.filename,
+                    "chunk_text": r.chunk_text,
+                    "similarity_score": r.similarity_score,
+                    "chunk_index": r.chunk_index,
+                }
+                for r in response.results
+            ],
+            total_results=response.total_results,
+            search_time_ms=response.search_time_ms,
+            highest_similarity_score=response.highest_similarity_score,
+        )
+    except SemanticSearchError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
+@app.post(
+    "/documents/{document_id}/search",
+    response_model=SearchResponse,
+    tags=["semantic-search"],
+)
+def perform_document_semantic_search(
+    document_id: int,
+    payload: SearchRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Perform semantic search within a specific document.
+
+    Searches only within the specified document's chunks.
+    Ensures user owns the document before proceeding.
+    """
+    # Verify user owns this document
+    get_user_document(db, current_user, document_id)
+
+    try:
+        response = search_documents(
+            db=db,
+            query=payload.query,
+            user_id=current_user.id,
+            top_k=payload.top_k,
+            document_id=document_id,
+        )
+        return SearchResponse(
+            query=response.query,
+            results=[
+                {
+                    "document_id": r.document_id,
+                    "chunk_id": r.chunk_id,
+                    "filename": r.filename,
+                    "chunk_text": r.chunk_text,
+                    "similarity_score": r.similarity_score,
+                    "chunk_index": r.chunk_index,
+                }
+                for r in response.results
+            ],
+            total_results=response.total_results,
+            search_time_ms=response.search_time_ms,
+            highest_similarity_score=response.highest_similarity_score,
+        )
+    except SemanticSearchError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
+@app.get(
+    "/search-statistics",
+    response_model=SearchStatisticsResponse,
+    tags=["semantic-search"],
+)
+def get_search_statistics_endpoint(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Get search statistics for the current user.
+
+    Returns counts of documents, chunks, and embeddings available for searching.
+    """
+    try:
+        stats = get_search_statistics(db, current_user.id)
+        return SearchStatisticsResponse(**stats)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not retrieve search statistics.",
+        ) from exc
 
 
 @app.post(

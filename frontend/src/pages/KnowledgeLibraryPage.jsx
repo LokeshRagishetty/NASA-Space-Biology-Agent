@@ -17,6 +17,7 @@ import {
   Trash2,
   Upload,
   X,
+  Zap,
 } from 'lucide-react'
 import PageTransition from '../components/PageTransition'
 import {
@@ -31,6 +32,9 @@ import {
   getKnowledgeDocuments,
   getVectorStoreHealth,
   getVectorStoreStats,
+  performDocumentSemanticSearch,
+  performSemanticSearch,
+  getSearchStatistics,
   regenerateKnowledgeDocumentEmbeddings,
   reprocessKnowledgeDocument,
   syncKnowledgeDocumentVectors,
@@ -650,6 +654,223 @@ function ChunksModal({ chunksPayload, document, error, loading, onClose, onQuery
   )
 }
 
+function SearchResultsModal({
+  searchPayload,
+  searchLoading,
+  searchError,
+  onClose,
+  isDocumentSearch,
+  searchQuery,
+}) {
+  const results = searchPayload?.results ?? []
+  const totalResults = searchPayload?.total_results ?? 0
+  const searchTimeMs = searchPayload?.search_time_ms ?? 0
+  const highestScore = searchPayload?.highest_similarity_score ?? null
+
+  const formatScore = (score) => {
+    if (!Number.isFinite(score)) return '0%'
+    return `${(score * 100).toFixed(1)}%`
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-3 backdrop-blur-sm sm:p-6">
+      <div className="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl dark:border-white/10 dark:bg-slate-950">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-200 p-4 dark:border-white/10 sm:p-5">
+          <div className="min-w-0">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <span className="rounded-full border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-500 dark:border-white/10 dark:text-slate-300">
+                Semantic Search {isDocumentSearch ? 'Results' : 'Results'}
+              </span>
+            </div>
+            <h2 className="truncate text-base font-semibold text-slate-950 dark:text-white sm:text-lg">
+              "{searchQuery}"
+            </h2>
+          </div>
+
+          <button type="button" className="icon-button shrink-0" onClick={onClose} aria-label="Close search results">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        {searchPayload && (
+          <div className="border-b border-slate-200 p-4 dark:border-white/10 sm:p-5">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div>
+                <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Results Found</p>
+                <p className="mt-1 text-lg font-semibold text-slate-950 dark:text-white">
+                  {formatNumber(totalResults)}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Search Time</p>
+                <p className="mt-1 text-lg font-semibold text-slate-950 dark:text-white">{searchTimeMs.toFixed(0)} ms</p>
+              </div>
+              {highestScore !== null && (
+                <div>
+                  <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Best Match</p>
+                  <p className="mt-1 text-lg font-semibold text-slate-950 dark:text-white">{formatScore(highestScore)}</p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {searchError && (
+          <div className="mx-4 mt-4 flex gap-3 rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-400/30 dark:bg-red-500/10 dark:text-red-100 sm:mx-5">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{searchError}</span>
+          </div>
+        )}
+
+        <div className="min-h-[360px] space-y-3 overflow-auto p-4 sm:p-5">
+          {searchLoading ? (
+            <div className="flex min-h-[320px] items-center justify-center gap-2 text-sm text-slate-500">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Searching documents
+            </div>
+          ) : results.length ? (
+            results.map((result) => (
+              <article
+                key={`${result.chunk_id}`}
+                className="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-white/10 dark:bg-white/[0.04]"
+              >
+                <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <h3 className="truncate text-sm font-semibold text-slate-950 dark:text-white">
+                      {result.filename}
+                    </h3>
+                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Chunk {result.chunk_index + 1}</p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2 rounded-full bg-sky-100 px-3 py-1 dark:bg-comet/30">
+                    <Zap className="h-3 w-3 text-sky-600 dark:text-comet" />
+                    <span className="text-xs font-semibold text-sky-700 dark:text-comet">{formatScore(result.similarity_score)}</span>
+                  </div>
+                </div>
+                <pre className="whitespace-pre-wrap break-words text-sm leading-6 text-slate-800 dark:text-slate-100">
+                  {result.chunk_text}
+                </pre>
+              </article>
+            ))
+          ) : (
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500 dark:border-white/10 dark:bg-white/[0.04] dark:text-slate-300">
+              No results found. Try a different search query.
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function SearchPanel({
+  onSearch,
+  onDocumentSearch,
+  searchLoading,
+  searchable,
+  selectedDocumentId,
+}) {
+  const [searchQuery, setSearchQuery] = useState('')
+  const [topK, setTopK] = useState('5')
+
+  const handleSearch = () => {
+    const query = searchQuery.trim()
+    if (!query) return
+
+    const topKValue = Math.max(1, Math.min(20, parseInt(topK, 10) || 5))
+
+    if (selectedDocumentId) {
+      onDocumentSearch(query, topKValue)
+    } else {
+      onSearch(query, topKValue)
+    }
+  }
+
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter' && !searchLoading) {
+      handleSearch()
+    }
+  }
+
+  return (
+    <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-white/[0.05] sm:p-5">
+      <div className="mb-4 flex items-center gap-2">
+        <Search className="h-5 w-5 text-sky-600 dark:text-comet" />
+        <h3 className="text-lg font-semibold text-slate-950 dark:text-white">Semantic Search</h3>
+      </div>
+
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+          <div className="flex-1 min-w-0">
+            <label className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-300">
+              Search Query
+            </label>
+            <input
+              type="text"
+              className="field rounded-xl w-full py-2 px-3"
+              placeholder="Search for topics, concepts, or keywords..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={handleKeyDown}
+              disabled={!searchable || searchLoading}
+            />
+          </div>
+
+          <div className="flex gap-2 sm:gap-3">
+            <div className="w-20">
+              <label className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-300">
+                Top K
+              </label>
+              <select
+                className="field rounded-xl w-full py-2 px-2 text-sm"
+                value={topK}
+                onChange={(e) => setTopK(e.target.value)}
+                disabled={!searchable || searchLoading}
+              >
+                {[1, 3, 5, 10, 15, 20].map((k) => (
+                  <option key={k} value={k}>
+                    {k}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <button
+              type="button"
+              className="primary-button h-10 px-4 self-end shrink-0"
+              onClick={handleSearch}
+              disabled={!searchable || searchLoading || !searchQuery.trim()}
+            >
+              {searchLoading ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Search className="h-4 w-4" />
+              )}
+              Search
+            </button>
+          </div>
+        </div>
+
+        {!searchable && (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-700 dark:border-amber-300/25 dark:bg-amber-400/10 dark:text-amber-100">
+            <div className="flex gap-2">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>
+                Search is not available yet. Generate embeddings for your documents to enable semantic search.
+              </span>
+            </div>
+          </div>
+        )}
+
+        {selectedDocumentId && (
+          <div className="rounded-2xl border border-sky-200 bg-sky-50 p-3 text-sm text-sky-700 dark:border-comet/25 dark:bg-comet/10 dark:text-comet">
+            Searching within the selected document only.
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export default function KnowledgeLibraryPage() {
   const navigate = useNavigate()
   const { setHistoryState } = useOutletContext()
@@ -684,6 +905,12 @@ export default function KnowledgeLibraryPage() {
   const [chunksLoading, setChunksLoading] = useState(false)
   const [chunksError, setChunksError] = useState('')
   const [chunksSearch, setChunksSearch] = useState('')
+  const [searchModalOpen, setSearchModalOpen] = useState(false)
+  const [searchPayload, setSearchPayload] = useState(null)
+  const [searchLoading, setSearchLoading] = useState(false)
+  const [searchError, setSearchError] = useState('')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchable, setSearchable] = useState(false)
   const [error, setError] = useState('')
 
   const selectedDocument = useMemo(
@@ -717,6 +944,18 @@ export default function KnowledgeLibraryPage() {
       if (!silent) {
         setLoading(false)
       }
+    }
+  }, [])
+
+  const loadSearchStatistics = useCallback(async ({ silent = false } = {}) => {
+    try {
+      const stats = await getSearchStatistics()
+      setSearchable(stats.searchable && stats.embeddings_count > 0)
+    } catch (err) {
+      if (!silent) {
+        console.error('Could not load search statistics:', err)
+      }
+      setSearchable(false)
     }
   }, [])
 
@@ -840,6 +1079,44 @@ export default function KnowledgeLibraryPage() {
     }
   }, [])
 
+  const handleSearch = useCallback(async (query, topK) => {
+    setSearchModalOpen(true)
+    setSearchPayload(null)
+    setSearchQuery(query)
+    setSearchLoading(true)
+    setSearchError('')
+
+    try {
+      const data = await performSemanticSearch(query, topK)
+      setSearchPayload(data)
+    } catch (err) {
+      setSearchPayload(null)
+      setSearchError(getApiError(err, 'Search failed. Please check that your documents have embeddings.'))
+    } finally {
+      setSearchLoading(false)
+    }
+  }, [])
+
+  const handleDocumentSearch = useCallback(async (query, topK) => {
+    if (!selectedDocumentId) return
+
+    setSearchModalOpen(true)
+    setSearchPayload(null)
+    setSearchQuery(query)
+    setSearchLoading(true)
+    setSearchError('')
+
+    try {
+      const data = await performDocumentSemanticSearch(selectedDocumentId, query, topK)
+      setSearchPayload(data)
+    } catch (err) {
+      setSearchPayload(null)
+      setSearchError(getApiError(err, 'Search failed. Please check that the document has embeddings.'))
+    } finally {
+      setSearchLoading(false)
+    }
+  }, [selectedDocumentId])
+
   useEffect(() => {
     setHistoryState({
       history: [],
@@ -857,7 +1134,8 @@ export default function KnowledgeLibraryPage() {
   useEffect(() => {
     loadDocuments()
     loadVectorStoreState()
-  }, [loadDocuments, loadVectorStoreState])
+    loadSearchStatistics()
+  }, [loadDocuments, loadVectorStoreState, loadSearchStatistics])
 
   useEffect(() => {
     if (!hasActiveProcessing) return undefined
@@ -1130,6 +1408,14 @@ export default function KnowledgeLibraryPage() {
           </div>
         )}
 
+        <SearchPanel
+          onSearch={handleSearch}
+          onDocumentSearch={handleDocumentSearch}
+          searchLoading={searchLoading}
+          searchable={searchable}
+          selectedDocumentId={selectedDocumentId}
+        />
+
         <section className="grid min-h-[560px] gap-5 lg:grid-cols-[390px_minmax(0,1fr)]">
           <div className="min-h-0 rounded-3xl border border-slate-200 bg-white p-3 shadow-sm dark:border-white/10 dark:bg-white/[0.05]">
             <div className="mb-3 flex items-center justify-between px-2 py-1">
@@ -1345,7 +1631,19 @@ export default function KnowledgeLibraryPage() {
             query={chunksSearch}
           />
         )}
+
+        {searchModalOpen && (
+          <SearchResultsModal
+            searchPayload={searchPayload}
+            searchLoading={searchLoading}
+            searchError={searchError}
+            onClose={() => setSearchModalOpen(false)}
+            isDocumentSearch={!!selectedDocumentId}
+            searchQuery={searchQuery}
+          />
+        )}
       </div>
     </PageTransition>
   )
 }
+
