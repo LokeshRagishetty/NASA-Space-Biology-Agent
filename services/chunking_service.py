@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from sqlalchemy.orm import Session
 
 from models import ChunkEmbedding, DocumentChunk, KnowledgeDocument
+from services.vector_store import VectorStoreError, delete_document_vectors
 
 
 DEFAULT_CHUNK_SIZE = int(os.getenv("KNOWLEDGE_CHUNK_SIZE", "1000"))
@@ -126,6 +127,11 @@ def delete_document_chunks(db: Session, document_id: int) -> int:
         .filter(DocumentChunk.document_id == document_id)
         .all()
     ]
+
+    try:
+        delete_document_vectors(document_id)
+    except VectorStoreError:
+        pass
 
     if chunk_ids:
         db.query(ChunkEmbedding).filter(ChunkEmbedding.chunk_id.in_(chunk_ids)).delete(synchronize_session=False)

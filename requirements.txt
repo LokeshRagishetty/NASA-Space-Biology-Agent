@@ -19,3 +19,4 @@ bcrypt
 PyMuPDF
 easyocr
 sentence-transformers
+chromadb

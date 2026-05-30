@@ -4,6 +4,7 @@ import {
   AlertCircle,
   BarChart3,
   Cpu,
+  Database,
   Download,
   FileSearch,
   FileImage,
@@ -26,9 +27,13 @@ import {
   getKnowledgeDocumentEmbeddingStats,
   getKnowledgeDocumentText,
   getKnowledgeDocumentPreview,
+  getKnowledgeDocumentVectorStats,
   getKnowledgeDocuments,
+  getVectorStoreHealth,
+  getVectorStoreStats,
   regenerateKnowledgeDocumentEmbeddings,
   reprocessKnowledgeDocument,
+  syncKnowledgeDocumentVectors,
   uploadKnowledgeDocument,
 } from '../services/api'
 
@@ -93,6 +98,21 @@ function getEmbeddingStatus(document, embeddingStats) {
   if (!chunkCount) return 'No chunks'
   if (embeddingCount === chunkCount) return 'Ready'
   if (!embeddingCount) return 'Missing'
+  return 'Partial'
+}
+
+function getVectorStatus(document, embeddingStats, vectorStats, vectorHealth) {
+  const status = getDocumentStatus(document)
+  if (vectorHealth?.status && vectorHealth.status !== 'healthy') return 'Unavailable'
+  if (ACTIVE_PROCESSING_STATUSES.has(status)) return 'Syncing'
+  if (status === 'failed') return 'Unavailable'
+
+  const embeddingCount = embeddingStats?.embedding_count || 0
+  const storedVectors = vectorStats?.stored_vectors || 0
+
+  if (!embeddingCount) return 'No embeddings'
+  if (storedVectors === embeddingCount) return 'Ready'
+  if (!storedVectors) return 'Missing'
   return 'Partial'
 }
 
@@ -299,8 +319,15 @@ function DocumentAnalyticsCard({
   embeddingStats,
   loading,
   onRegenerateEmbeddings,
+  onSyncVectors,
   regeneratingEmbeddings,
   stats,
+  syncingVectors,
+  vectorError,
+  vectorHealth,
+  vectorLoading,
+  vectorStats,
+  vectorStoreStats,
 }) {
   const statItems = [
     { label: 'Pages', value: stats?.page_count || 0 },
@@ -329,6 +356,30 @@ function DocumentAnalyticsCard({
     { label: 'Embedding Dimension', value: embeddingStats?.embedding_dimension || 0, type: 'number' },
     { label: 'Model Name', value: embeddingStats?.embedding_model || 'all-MiniLM-L6-v2', type: 'text' },
   ]
+  const vectorStatus = getVectorStatus(document, embeddingStats, vectorStats, vectorHealth)
+  const vectorStatusClass = {
+    Ready:
+      'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-300/25 dark:bg-emerald-400/10 dark:text-emerald-100',
+    Syncing:
+      'border-sky-200 bg-sky-50 text-sky-700 dark:border-comet/25 dark:bg-comet/10 dark:text-comet',
+    Missing:
+      'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-300/25 dark:bg-amber-400/10 dark:text-amber-100',
+    Partial:
+      'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-300/25 dark:bg-amber-400/10 dark:text-amber-100',
+    Unavailable:
+      'border-red-200 bg-red-50 text-red-700 dark:border-red-300/25 dark:bg-red-400/10 dark:text-red-100',
+    'No embeddings':
+      'border-slate-200 bg-slate-50 text-slate-600 dark:border-white/10 dark:bg-white/[0.04] dark:text-slate-300',
+  }
+  const vectorItems = [
+    { label: 'Vector Status', value: vectorStatus, type: 'status' },
+    { label: 'Stored Vector Count', value: vectorStats?.stored_vectors || 0, type: 'number' },
+    {
+      label: 'Collection Name',
+      value: vectorStoreStats?.collection_name || vectorHealth?.collection || 'knowledge_documents',
+      type: 'text',
+    },
+  ]
   const displayedEmbeddingError =
     embeddingError || (getDocumentStatus(document) === 'completed' ? document?.extraction_error : '')
   const canRegenerate =
@@ -336,6 +387,11 @@ function DocumentAnalyticsCard({
     !ACTIVE_PROCESSING_STATUSES.has(getDocumentStatus(document)) &&
     getDocumentStatus(document) !== 'failed' &&
     Boolean(embeddingStats?.chunk_count)
+  const canSyncVectors =
+    document &&
+    !ACTIVE_PROCESSING_STATUSES.has(getDocumentStatus(document)) &&
+    getDocumentStatus(document) !== 'failed' &&
+    Boolean(embeddingStats?.embedding_count)
 
   return (
     <div className="mb-4 border-b border-slate-200 pb-4 dark:border-white/10">
@@ -407,6 +463,66 @@ function DocumentAnalyticsCard({
                   <span
                     className={`mt-1 inline-flex h-7 max-w-full items-center rounded-full border px-2.5 text-xs font-semibold ${
                       embeddingStatusClass[item.value] || embeddingStatusClass.Missing
+                    }`}
+                  >
+                    {item.value}
+                  </span>
+                ) : (
+                  <p className="mt-1 break-words text-lg font-semibold text-slate-950 dark:text-white">
+                    {item.type === 'number' ? formatNumber(item.value) : item.value}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="mt-5 border-t border-slate-200 pt-4 dark:border-white/10">
+        <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white">
+            <Database className="h-4 w-4 text-sky-600 dark:text-comet" />
+            Vector Storage
+          </div>
+          <button
+            type="button"
+            className="secondary-button py-2"
+            onClick={onSyncVectors}
+            disabled={!canSyncVectors || syncingVectors}
+          >
+            {syncingVectors ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4" />
+            )}
+            Sync Vectors
+          </button>
+        </div>
+
+        {vectorError && (
+          <div className="mb-3 flex gap-3 rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-400/30 dark:bg-red-500/10 dark:text-red-100">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{vectorError}</span>
+          </div>
+        )}
+
+        {vectorLoading ? (
+          <div className="flex items-center gap-2 py-3 text-sm text-slate-500">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Loading vector storage
+          </div>
+        ) : (
+          <div className="grid gap-2 sm:grid-cols-3">
+            {vectorItems.map((item) => (
+              <div
+                key={item.label}
+                className="min-w-0 border-l border-slate-200 pl-3 dark:border-white/10"
+              >
+                <p className="text-xs font-medium text-slate-500 dark:text-slate-400">{item.label}</p>
+                {item.type === 'status' ? (
+                  <span
+                    className={`mt-1 inline-flex h-7 max-w-full items-center rounded-full border px-2.5 text-xs font-semibold ${
+                      vectorStatusClass[item.value] || vectorStatusClass.Missing
                     }`}
                   >
                     {item.value}
@@ -557,6 +673,12 @@ export default function KnowledgeLibraryPage() {
   const [embeddingStatsLoading, setEmbeddingStatsLoading] = useState(false)
   const [embeddingError, setEmbeddingError] = useState('')
   const [regeneratingEmbeddingId, setRegeneratingEmbeddingId] = useState(null)
+  const [vectorStoreStats, setVectorStoreStats] = useState(null)
+  const [vectorStoreHealth, setVectorStoreHealth] = useState(null)
+  const [vectorStats, setVectorStats] = useState(null)
+  const [vectorStatsLoading, setVectorStatsLoading] = useState(false)
+  const [vectorError, setVectorError] = useState('')
+  const [syncingVectorId, setSyncingVectorId] = useState(null)
   const [chunksModalOpen, setChunksModalOpen] = useState(false)
   const [chunksPayload, setChunksPayload] = useState(null)
   const [chunksLoading, setChunksLoading] = useState(false)
@@ -656,6 +778,53 @@ export default function KnowledgeLibraryPage() {
     }
   }, [])
 
+  const loadVectorStoreState = useCallback(async ({ silent = false } = {}) => {
+    if (!silent) {
+      setVectorError('')
+    }
+
+    try {
+      const health = await getVectorStoreHealth()
+      setVectorStoreHealth(health)
+    } catch (err) {
+      setVectorStoreHealth({ status: 'unhealthy', collection: 'knowledge_documents' })
+      if (!silent) {
+        setVectorError(getApiError(err, 'Could not load vector store health.'))
+      }
+    }
+
+    try {
+      const stats = await getVectorStoreStats()
+      setVectorStoreStats(stats)
+    } catch (err) {
+      setVectorStoreStats(null)
+      if (!silent) {
+        setVectorError((current) => current || getApiError(err, 'Could not load vector store information.'))
+      }
+    }
+  }, [])
+
+  const loadVectorStats = useCallback(async (documentId, { silent = false } = {}) => {
+    if (!silent) {
+      setVectorStatsLoading(true)
+      setVectorError('')
+    }
+
+    try {
+      const data = await getKnowledgeDocumentVectorStats(documentId)
+      setVectorStats(data)
+    } catch (err) {
+      setVectorStats(null)
+      if (!silent) {
+        setVectorError(getApiError(err, 'Could not load vector storage information.'))
+      }
+    } finally {
+      if (!silent) {
+        setVectorStatsLoading(false)
+      }
+    }
+  }, [])
+
   const loadDocumentChunks = useCallback(async (documentId) => {
     setChunksLoading(true)
     setChunksError('')
@@ -686,27 +855,28 @@ export default function KnowledgeLibraryPage() {
   }, [navigate, setHistoryState])
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadDocuments()
-  }, [loadDocuments])
+    loadVectorStoreState()
+  }, [loadDocuments, loadVectorStoreState])
 
   useEffect(() => {
     if (!hasActiveProcessing) return undefined
 
     const interval = window.setInterval(() => {
       loadDocuments({ silent: true })
+      loadVectorStoreState({ silent: true })
     }, 3000)
 
     return () => window.clearInterval(interval)
-  }, [hasActiveProcessing, loadDocuments])
+  }, [hasActiveProcessing, loadDocuments, loadVectorStoreState])
 
   useEffect(() => {
     if (!selectedDocument) return
 
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadChunkStats(selectedDocument.id)
     loadEmbeddingStats(selectedDocument.id)
-  }, [loadChunkStats, loadEmbeddingStats, selectedDocument])
+    loadVectorStats(selectedDocument.id)
+  }, [loadChunkStats, loadEmbeddingStats, loadVectorStats, selectedDocument])
 
   useEffect(() => {
     if (!selectedDocument || !ACTIVE_PROCESSING_STATUSES.has(getDocumentStatus(selectedDocument))) return undefined
@@ -714,10 +884,11 @@ export default function KnowledgeLibraryPage() {
     const interval = window.setInterval(() => {
       loadChunkStats(selectedDocument.id, { silent: true })
       loadEmbeddingStats(selectedDocument.id, { silent: true })
+      loadVectorStats(selectedDocument.id, { silent: true })
     }, 3000)
 
     return () => window.clearInterval(interval)
-  }, [loadChunkStats, loadEmbeddingStats, selectedDocument])
+  }, [loadChunkStats, loadEmbeddingStats, loadVectorStats, selectedDocument])
 
   useEffect(() => {
     const modalStatus = textPayload?.status || getDocumentStatus(selectedDocument)
@@ -820,6 +991,7 @@ export default function KnowledgeLibraryPage() {
     setError('')
     setTextError('')
     setEmbeddingError('')
+    setVectorError('')
 
     try {
       const updatedDocument = await reprocessKnowledgeDocument(document.id)
@@ -843,6 +1015,8 @@ export default function KnowledgeLibraryPage() {
       }
       setChunkStats(null)
       setEmbeddingStats(null)
+      setVectorStats(null)
+      loadVectorStoreState({ silent: true })
     } catch (err) {
       const message = getApiError(err, 'Could not reprocess document.')
       if (textModalOpen) {
@@ -858,14 +1032,34 @@ export default function KnowledgeLibraryPage() {
   async function handleRegenerateEmbeddings(document) {
     setRegeneratingEmbeddingId(document.id)
     setEmbeddingError('')
+    setVectorError('')
 
     try {
       const data = await regenerateKnowledgeDocumentEmbeddings(document.id)
       setEmbeddingStats(data)
+      await Promise.all([
+        loadVectorStats(document.id, { silent: true }),
+        loadVectorStoreState({ silent: true }),
+      ])
     } catch (err) {
       setEmbeddingError(getApiError(err, 'Could not regenerate embeddings.'))
     } finally {
       setRegeneratingEmbeddingId(null)
+    }
+  }
+
+  async function handleSyncVectors(document) {
+    setSyncingVectorId(document.id)
+    setVectorError('')
+
+    try {
+      const data = await syncKnowledgeDocumentVectors(document.id)
+      setVectorStats(data)
+      await loadVectorStoreState({ silent: true })
+    } catch (err) {
+      setVectorError(getApiError(err, 'Could not sync vectors.'))
+    } finally {
+      setSyncingVectorId(null)
     }
   }
 
@@ -881,6 +1075,8 @@ export default function KnowledgeLibraryPage() {
       const nextDocuments = documents.filter((item) => item.id !== document.id)
       setDocuments(nextDocuments)
       setSelectedDocumentId((currentId) => (currentId === document.id ? nextDocuments[0]?.id || null : currentId))
+      setVectorStats(null)
+      loadVectorStoreState({ silent: true })
     } catch (err) {
       setError(getApiError(err, 'Could not delete document.'))
     } finally {
@@ -1074,8 +1270,15 @@ export default function KnowledgeLibraryPage() {
                   embeddingStats={embeddingStats}
                   loading={chunkStatsLoading}
                   onRegenerateEmbeddings={() => handleRegenerateEmbeddings(selectedDocument)}
+                  onSyncVectors={() => handleSyncVectors(selectedDocument)}
                   regeneratingEmbeddings={regeneratingEmbeddingId === selectedDocument.id}
                   stats={chunkStats}
+                  syncingVectors={syncingVectorId === selectedDocument.id}
+                  vectorError={vectorError}
+                  vectorHealth={vectorStoreHealth}
+                  vectorLoading={vectorStatsLoading}
+                  vectorStats={vectorStats}
+                  vectorStoreStats={vectorStoreStats}
                 />
 
                 {getDocumentStatus(selectedDocument) === 'failed' && (

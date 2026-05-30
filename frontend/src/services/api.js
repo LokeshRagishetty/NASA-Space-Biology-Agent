@@ -142,6 +142,26 @@ export async function regenerateKnowledgeDocumentEmbeddings(documentId) {
   return data
 }
 
+export async function getVectorStoreStats() {
+  const { data } = await api.get('/vector-store/stats')
+  return data
+}
+
+export async function getVectorStoreHealth() {
+  const { data } = await api.get('/vector-store/health')
+  return data
+}
+
+export async function getKnowledgeDocumentVectorStats(documentId) {
+  const { data } = await api.get(`/documents/${documentId}/vector-stats`)
+  return data
+}
+
+export async function syncKnowledgeDocumentVectors(documentId) {
+  const { data } = await api.post(`/documents/${documentId}/sync-vectors`)
+  return data
+}
+
 export async function askQuestion(question, sessionId) {
   const { data } = await api.post(
     '/ask',
