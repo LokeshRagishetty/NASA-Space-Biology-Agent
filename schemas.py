@@ -278,3 +278,25 @@ class SearchStatisticsResponse(BaseModel):
     embeddings_count: int
     searchable: bool
 
+
+class RagQueryRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=4000)
+    top_k: Optional[int] = Field(default=None, ge=1, le=20)
+    model: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0)
+    max_tokens: Optional[int] = Field(default=None, ge=1, le=8192)
+
+    @field_validator("query")
+    @classmethod
+    def clean_query(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("RAG query cannot be empty or whitespace only.")
+        return cleaned
+
+
+class RagQueryResponse(BaseModel):
+    answer: str
+    retrieved_chunks: int
+    context_length: int
+    response_time_ms: float

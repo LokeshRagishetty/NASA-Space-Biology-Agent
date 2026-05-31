@@ -33,6 +33,7 @@ import {
   getVectorStoreHealth,
   getVectorStoreStats,
   performDocumentSemanticSearch,
+  performRagQuery,
   performSemanticSearch,
   getSearchStatistics,
   regenerateKnowledgeDocumentEmbeddings,
@@ -871,6 +872,96 @@ function SearchPanel({
   )
 }
 
+function TestRagPanel({ error, loading, onSubmit, result, searchable }) {
+  const [query, setQuery] = useState('')
+
+  const handleSubmit = (event) => {
+    event.preventDefault()
+    const cleanedQuery = query.trim()
+    if (!cleanedQuery || loading) return
+    onSubmit(cleanedQuery)
+  }
+
+  return (
+    <section className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-white/[0.05] sm:p-5">
+      <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <div className="mb-2 flex items-center gap-2 text-lg font-semibold text-slate-950 dark:text-white">
+              <Zap className="h-5 w-5 text-sky-600 dark:text-comet" />
+              Test RAG
+            </div>
+          </div>
+          <button
+            type="submit"
+            className="primary-button h-10 shrink-0 px-4 py-2"
+            disabled={!searchable || loading || !query.trim()}
+          >
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4" />}
+            Run RAG
+          </button>
+        </div>
+
+        <textarea
+          className="field min-h-[96px] resize-y rounded-xl"
+          placeholder="How does microgravity affect plants?"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          disabled={!searchable || loading}
+        />
+
+        {!searchable && (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-700 dark:border-amber-300/25 dark:bg-amber-400/10 dark:text-amber-100">
+            <div className="flex gap-2">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>RAG is available after your documents have embeddings and synced vectors.</span>
+            </div>
+          </div>
+        )}
+
+        {error && (
+          <div className="flex gap-3 rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-400/30 dark:bg-red-500/10 dark:text-red-100">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        {result && (
+          <div className="space-y-4 border-t border-slate-200 pt-4 dark:border-white/10">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="min-w-0 border-l border-slate-200 pl-3 dark:border-white/10">
+                <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Retrieved Chunks</p>
+                <p className="mt-1 text-lg font-semibold text-slate-950 dark:text-white">
+                  {formatNumber(result.retrieved_chunks || 0)}
+                </p>
+              </div>
+              <div className="min-w-0 border-l border-slate-200 pl-3 dark:border-white/10">
+                <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Context Length</p>
+                <p className="mt-1 text-lg font-semibold text-slate-950 dark:text-white">
+                  {formatNumber(result.context_length || 0)}
+                </p>
+              </div>
+              <div className="min-w-0 border-l border-slate-200 pl-3 dark:border-white/10">
+                <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Response Time</p>
+                <p className="mt-1 text-lg font-semibold text-slate-950 dark:text-white">
+                  {(result.response_time_ms || 0).toFixed(0)} ms
+                </p>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-white/10 dark:bg-white/[0.04]">
+              <p className="mb-2 text-sm font-semibold text-slate-950 dark:text-white">Answer</p>
+              <pre className="whitespace-pre-wrap break-words text-sm leading-6 text-slate-800 dark:text-slate-100">
+                {result.answer}
+              </pre>
+            </div>
+          </div>
+        )}
+      </form>
+    </section>
+  )
+}
+
 export default function KnowledgeLibraryPage() {
   const navigate = useNavigate()
   const { setHistoryState } = useOutletContext()
@@ -911,6 +1002,9 @@ export default function KnowledgeLibraryPage() {
   const [searchError, setSearchError] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const [searchable, setSearchable] = useState(false)
+  const [ragPayload, setRagPayload] = useState(null)
+  const [ragLoading, setRagLoading] = useState(false)
+  const [ragError, setRagError] = useState('')
   const [error, setError] = useState('')
 
   const selectedDocument = useMemo(
@@ -1117,6 +1211,22 @@ export default function KnowledgeLibraryPage() {
     }
   }, [selectedDocumentId])
 
+  const handleRagQuery = useCallback(async (query) => {
+    setRagPayload(null)
+    setRagLoading(true)
+    setRagError('')
+
+    try {
+      const data = await performRagQuery(query)
+      setRagPayload(data)
+    } catch (err) {
+      setRagPayload(null)
+      setRagError(getApiError(err, 'RAG query failed. Please check that your vectors are available.'))
+    } finally {
+      setRagLoading(false)
+    }
+  }, [])
+
   useEffect(() => {
     setHistoryState({
       history: [],
@@ -1143,10 +1253,11 @@ export default function KnowledgeLibraryPage() {
     const interval = window.setInterval(() => {
       loadDocuments({ silent: true })
       loadVectorStoreState({ silent: true })
+      loadSearchStatistics({ silent: true })
     }, 3000)
 
     return () => window.clearInterval(interval)
-  }, [hasActiveProcessing, loadDocuments, loadVectorStoreState])
+  }, [hasActiveProcessing, loadDocuments, loadSearchStatistics, loadVectorStoreState])
 
   useEffect(() => {
     if (!selectedDocument) return
@@ -1318,6 +1429,7 @@ export default function KnowledgeLibraryPage() {
       await Promise.all([
         loadVectorStats(document.id, { silent: true }),
         loadVectorStoreState({ silent: true }),
+        loadSearchStatistics({ silent: true }),
       ])
     } catch (err) {
       setEmbeddingError(getApiError(err, 'Could not regenerate embeddings.'))
@@ -1333,7 +1445,10 @@ export default function KnowledgeLibraryPage() {
     try {
       const data = await syncKnowledgeDocumentVectors(document.id)
       setVectorStats(data)
-      await loadVectorStoreState({ silent: true })
+      await Promise.all([
+        loadVectorStoreState({ silent: true }),
+        loadSearchStatistics({ silent: true }),
+      ])
     } catch (err) {
       setVectorError(getApiError(err, 'Could not sync vectors.'))
     } finally {
@@ -1355,6 +1470,7 @@ export default function KnowledgeLibraryPage() {
       setSelectedDocumentId((currentId) => (currentId === document.id ? nextDocuments[0]?.id || null : currentId))
       setVectorStats(null)
       loadVectorStoreState({ silent: true })
+      loadSearchStatistics({ silent: true })
     } catch (err) {
       setError(getApiError(err, 'Could not delete document.'))
     } finally {
@@ -1414,6 +1530,14 @@ export default function KnowledgeLibraryPage() {
           searchLoading={searchLoading}
           searchable={searchable}
           selectedDocumentId={selectedDocumentId}
+        />
+
+        <TestRagPanel
+          error={ragError}
+          loading={ragLoading}
+          onSubmit={handleRagQuery}
+          result={ragPayload}
+          searchable={searchable}
         />
 
         <section className="grid min-h-[560px] gap-5 lg:grid-cols-[390px_minmax(0,1fr)]">
@@ -1646,4 +1770,3 @@ export default function KnowledgeLibraryPage() {
     </PageTransition>
   )
 }
-
