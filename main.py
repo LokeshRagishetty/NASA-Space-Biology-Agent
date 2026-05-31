@@ -53,6 +53,8 @@ from schemas import (
     KnowledgeDocumentResponse,
     KnowledgeDocumentTextResponse,
     MessageResponse,
+    RagQueryRequest,
+    RagQueryResponse,
     SearchRequest,
     SearchResponse,
     SearchStatisticsResponse,
@@ -77,6 +79,7 @@ from services.embedding_service import (
     get_document_embedding_statistics,
     regenerate_document_embeddings,
 )
+from services.rag_service import RagServiceError, answer_query_with_rag
 from services.semantic_search import (
     SemanticSearchError,
     search_documents,
@@ -1422,6 +1425,39 @@ def get_search_statistics_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Could not retrieve search statistics.",
         ) from exc
+
+
+@app.post(
+    "/rag/query",
+    response_model=RagQueryResponse,
+    tags=["rag"],
+)
+def query_rag(
+    payload: RagQueryRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Answer a question using only chunks retrieved from the user's uploaded knowledge base.
+    """
+    try:
+        response = answer_query_with_rag(
+            db=db,
+            query=payload.query,
+            user_id=current_user.id,
+            top_k=payload.top_k,
+            model=payload.model,
+            temperature=payload.temperature,
+            max_tokens=payload.max_tokens,
+        )
+        return RagQueryResponse(
+            answer=response.answer,
+            retrieved_chunks=response.retrieved_chunks,
+            context_length=response.context_length,
+            response_time_ms=response.response_time_ms,
+        )
+    except RagServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
 
 @app.post(

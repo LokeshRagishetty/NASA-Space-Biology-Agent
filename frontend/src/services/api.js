@@ -177,6 +177,11 @@ export async function getSearchStatistics() {
   return data
 }
 
+export async function performRagQuery(query) {
+  const { data } = await api.post('/rag/query', { query })
+  return data
+}
+
 export async function askQuestion(question, sessionId) {
   const { data } = await api.post(
     '/ask',
