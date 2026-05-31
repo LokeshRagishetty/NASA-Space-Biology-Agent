@@ -295,8 +295,20 @@ class RagQueryRequest(BaseModel):
         return cleaned
 
 
+class RagCitation(BaseModel):
+    document_id: int
+    filename: str
+    chunk_index: int
+    chunk_id: int
+
+
 class RagQueryResponse(BaseModel):
     answer: str
     retrieved_chunks: int
     context_length: int
     response_time_ms: float
+    citations: list[RagCitation] = Field(default_factory=list)
+    semantic_matches: int = 0
+    keyword_matches: int = 0
+    merged_results: int = 0
+    final_context_count: int = 0

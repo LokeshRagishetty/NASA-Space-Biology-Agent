@@ -1455,6 +1455,19 @@ def query_rag(
             retrieved_chunks=response.retrieved_chunks,
             context_length=response.context_length,
             response_time_ms=response.response_time_ms,
+            citations=[
+                {
+                    "document_id": citation.document_id,
+                    "filename": citation.filename,
+                    "chunk_index": citation.chunk_index,
+                    "chunk_id": citation.chunk_id,
+                }
+                for citation in response.citations
+            ],
+            semantic_matches=response.semantic_matches,
+            keyword_matches=response.keyword_matches,
+            merged_results=response.merged_results,
+            final_context_count=response.final_context_count,
         )
     except RagServiceError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc

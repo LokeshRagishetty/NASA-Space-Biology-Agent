@@ -24,7 +24,7 @@ from services.vector_store import get_collection
 MAX_TOP_K = 20
 
 # Default number of results
-DEFAULT_TOP_K = 5
+DEFAULT_TOP_K = 10
 
 # Minimum similarity score (0-1 range)
 MIN_SIMILARITY_SCORE = 0.0

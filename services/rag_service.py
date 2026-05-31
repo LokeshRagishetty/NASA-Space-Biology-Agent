@@ -8,7 +8,15 @@ from langchain_core.prompts import PromptTemplate
 from langchain_groq import ChatGroq
 from sqlalchemy.orm import Session
 
-from services.semantic_search import DEFAULT_TOP_K, SemanticSearchError, SearchResult, search_documents
+from services.hybrid_retrieval import (
+    HybridRetrievalError,
+    HybridRetrievalResponse,
+    HybridRetrievalResult,
+    SourceCitation,
+    citation_for_result,
+    retrieve_hybrid,
+)
+from services.semantic_search import DEFAULT_TOP_K
 
 
 INSUFFICIENT_CONTEXT_MESSAGE = "I could not find enough information in the uploaded knowledge base."
@@ -51,6 +59,11 @@ class RagResponse:
     retrieved_chunks: int
     context_length: int
     response_time_ms: float
+    citations: list[SourceCitation]
+    semantic_matches: int
+    keyword_matches: int
+    merged_results: int
+    final_context_count: int
 
 
 @dataclass(frozen=True)
@@ -58,6 +71,7 @@ class ContextWindow:
     context: str
     chunk_count: int
     context_length: int
+    citations: list[SourceCitation]
 
 
 RAG_PROMPT = PromptTemplate.from_template(
@@ -68,6 +82,7 @@ If the context does not explicitly contain enough information to answer, reply e
 {insufficient_context_message}
 
 Do not invent facts. Do not use outside knowledge.
+Use the document and chunk labels in the context to stay grounded.
 
 CONTEXT:
 {context}
@@ -78,6 +93,23 @@ QUESTION:
 ANSWER:"""
 )
 
+EXTRACTION_PROMPT = PromptTemplate.from_template(
+    """
+Extract the requested information from the context.
+
+Return only information that appears explicitly in the context.
+
+Do not use outside knowledge.
+
+CONTEXT:
+{context}
+
+QUESTION:
+{question}
+
+ANSWER:
+"""
+)
 
 def get_groq_llm(
     model: Optional[str] = None,
@@ -99,10 +131,11 @@ def get_groq_llm(
 
 
 def build_context_window(
-    results: list[SearchResult],
+    results: list[HybridRetrievalResult],
     max_characters: int = DEFAULT_CONTEXT_CHAR_LIMIT,
 ) -> ContextWindow:
     context_blocks: list[str] = []
+    citations: list[SourceCitation] = []
     used_characters = 0
 
     for result in results:
@@ -110,7 +143,11 @@ def build_context_window(
         if not chunk_text:
             continue
 
-        prefix = f"[Chunk {len(context_blocks) + 1}]\n"
+        prefix = (
+            f"[Document: {result.filename}]\n"
+            f"[Chunk: {result.chunk_index + 1}]\n"
+            f"[Chunk ID: {result.chunk_id}]\n"
+        )
         available = max_characters - used_characters - len(prefix)
         if available <= 0:
             break
@@ -120,6 +157,7 @@ def build_context_window(
 
         block = f"{prefix}{chunk_text}"
         context_blocks.append(block)
+        citations.append(citation_for_result(result))
         used_characters += len(block) + 2
 
         if used_characters >= max_characters:
@@ -130,6 +168,7 @@ def build_context_window(
         context=context,
         chunk_count=len(context_blocks),
         context_length=len(context),
+        citations=citations,
     )
 
 
@@ -150,35 +189,91 @@ def answer_query_with_rag(
     cleaned_query = validate_rag_query(query)
 
     try:
-        search_response = search_documents(
+        retrieval_response = retrieve_hybrid(
             db=db,
             query=cleaned_query,
             user_id=user_id,
             top_k=top_k or DEFAULT_TOP_K,
         )
-    except SemanticSearchError as exc:
+    except HybridRetrievalError as exc:
         raise RagRetrievalError(str(exc), status_code=getattr(exc, "status_code", 503)) from exc
 
-    context_window = build_context_window(search_response.results)
+    context_window = build_context_window(retrieval_response.results)
     if context_window.chunk_count == 0:
-        return build_rag_response(start_time, INSUFFICIENT_CONTEXT_MESSAGE, context_window)
-
-    try:
-        chain = build_rag_chain(get_groq_llm(model=model, temperature=temperature, max_tokens=max_tokens))
-        answer = chain.invoke(
-            {
-                "context": context_window.context,
-                "question": cleaned_query,
-                "insufficient_context_message": INSUFFICIENT_CONTEXT_MESSAGE,
-            }
+        return build_rag_response(
+            start_time,
+            INSUFFICIENT_CONTEXT_MESSAGE,
+            context_window,
+            retrieval_response,
         )
+    query_lower = cleaned_query.lower()
+
+    if is_extraction_query(cleaned_query):
+        EMAIL_PROMPT = PromptTemplate.from_template("""
+            Extract and list every email address found in the context.
+
+            Return only the email addresses.
+            Do not add explanations.
+
+            CONTEXT:
+            {context}
+
+            EMAILS:
+            """)
+
+    chain = EMAIL_PROMPT | get_groq_llm(
+        model=model,
+        temperature=0,
+        max_tokens=max_tokens
+    ) | StrOutputParser()
+
+    answer = chain.invoke({
+        "context": context_window.context
+    })
+
+    cleaned_answer = (answer or "").strip() or INSUFFICIENT_CONTEXT_MESSAGE
+
+    return build_rag_response(
+        start_time,
+        cleaned_answer,
+        context_window,
+        retrieval_response,
+
+    )
+    try:
+        llm = get_groq_llm(
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens
+        )
+
+        if is_extraction_query(cleaned_query):
+            chain = EXTRACTION_PROMPT | llm | StrOutputParser()
+
+            answer = chain.invoke(
+                {
+                    "context": context_window.context,
+                    "question": cleaned_query,
+                }
+            )
+
+        else:
+            chain = build_rag_chain(llm)
+
+            answer = chain.invoke(
+                {
+                    "context": context_window.context,
+                    "question": cleaned_query,
+                    "insufficient_context_message": INSUFFICIENT_CONTEXT_MESSAGE,
+                }
+            )
     except Exception as exc:
         if is_timeout_error(exc):
             raise RagTimeoutError("Groq timed out while generating the RAG answer. Please retry.") from exc
         raise GroqUnavailableError("Groq is unavailable while generating the RAG answer. Please retry.") from exc
 
     cleaned_answer = (answer or "").strip() or INSUFFICIENT_CONTEXT_MESSAGE
-    return build_rag_response(start_time, cleaned_answer, context_window)
+    return build_rag_response(start_time, cleaned_answer, context_window, retrieval_response)
 
 
 def validate_rag_query(query: str) -> str:
@@ -195,12 +290,22 @@ def validate_rag_query(query: str) -> str:
     return cleaned
 
 
-def build_rag_response(start_time: float, answer: str, context_window: ContextWindow) -> RagResponse:
+def build_rag_response(
+    start_time: float,
+    answer: str,
+    context_window: ContextWindow,
+    retrieval_response: HybridRetrievalResponse,
+) -> RagResponse:
     return RagResponse(
         answer=answer,
         retrieved_chunks=context_window.chunk_count,
         context_length=context_window.context_length,
         response_time_ms=round((time.perf_counter() - start_time) * 1000, 2),
+        citations=context_window.citations,
+        semantic_matches=retrieval_response.semantic_matches,
+        keyword_matches=retrieval_response.keyword_matches,
+        merged_results=retrieval_response.merged_results,
+        final_context_count=context_window.chunk_count,
     )
 
 
@@ -211,3 +316,23 @@ def is_timeout_error(exc: Exception) -> bool:
     name = exc.__class__.__name__.lower()
     message = str(exc).lower()
     return "timeout" in name or "timed out" in message or "timeout" in message
+
+def is_extraction_query(query: str) -> bool:
+    query = query.lower()
+
+    extraction_terms = [
+        "email",
+        "emails",
+        "email address",
+        "email addresses",
+        "phone",
+        "phone number",
+        "id",
+        "ids",
+        "identifier",
+        "identifiers",
+        "url",
+        "urls",
+    ]
+
+    return any(term in query for term in extraction_terms)
