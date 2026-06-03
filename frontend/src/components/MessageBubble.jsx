@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
-import { Bot, Check, Copy, UserCircle } from 'lucide-react'
+import { Bot, Check, Copy, ExternalLink, FileText, Timer, UserCircle } from 'lucide-react'
 
 function hasHtml(value) {
   return /<\/?[a-z][\s\S]*>/i.test(value)
@@ -50,6 +50,99 @@ function MarkdownContent({ content }) {
   )
 }
 
+function formatAuthors(authors = []) {
+  if (!Array.isArray(authors) || authors.length === 0) return 'Unknown authors'
+  if (authors.length <= 4) return authors.join(', ')
+  return `${authors.slice(0, 4).join(', ')} et al.`
+}
+
+function formatNumber(value) {
+  if (typeof value !== 'number') return '0'
+  return new Intl.NumberFormat().format(value)
+}
+
+function ResearchRagPanel({ metadata }) {
+  if (!metadata || metadata.mode !== 'research_rag') return null
+
+  const citations = Array.isArray(metadata.citations) ? metadata.citations : []
+  const papersRetrieved = Number(metadata.papers_retrieved || 0)
+  const papersUsed = Number(metadata.papers_used || 0)
+  const contextLength = Number(metadata.context_length || 0)
+  const responseTime = Number(metadata.response_time_ms || 0)
+
+  return (
+    <section className="mt-4 border-t border-slate-200 pt-4 dark:border-white/10">
+      <div className="grid gap-2 text-xs sm:grid-cols-3">
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 dark:border-white/10 dark:bg-white/[0.04]">
+          <p className="font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">
+            Papers Retrieved
+          </p>
+          <p className="mt-1 text-base font-semibold text-slate-950 dark:text-white">
+            {formatNumber(papersRetrieved)}
+            {papersUsed ? <span className="text-xs font-medium text-slate-500"> / {papersUsed} used</span> : null}
+          </p>
+        </div>
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 dark:border-white/10 dark:bg-white/[0.04]">
+          <p className="font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">
+            Context Length
+          </p>
+          <p className="mt-1 text-base font-semibold text-slate-950 dark:text-white">
+            {formatNumber(contextLength)}
+          </p>
+        </div>
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 dark:border-white/10 dark:bg-white/[0.04]">
+          <p className="flex items-center gap-1 font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">
+            <Timer className="h-3.5 w-3.5" />
+            Response Time
+          </p>
+          <p className="mt-1 text-base font-semibold text-slate-950 dark:text-white">
+            {formatNumber(responseTime)} ms
+          </p>
+        </div>
+      </div>
+
+      {citations.length > 0 && (
+        <div className="mt-4">
+          <h3 className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
+            <FileText className="h-4 w-4" />
+            Paper Citations
+          </h3>
+          <div className="space-y-2">
+            {citations.map((citation, index) => (
+              <article
+                key={`${citation.ads_url || citation.title}-${index}`}
+                className="rounded-2xl border border-slate-200 bg-white px-3 py-3 text-xs leading-5 dark:border-white/10 dark:bg-white/[0.04]"
+              >
+                <h4 className="text-sm font-semibold leading-5 text-slate-950 dark:text-white">
+                  {citation.title || 'Untitled paper'}
+                </h4>
+                <p className="mt-1 text-slate-600 dark:text-slate-300">
+                  {formatAuthors(citation.authors)}
+                </p>
+                <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-slate-500 dark:text-slate-400">
+                  <span>Year: {citation.year || 'Unknown'}</span>
+                  <span>DOI: {citation.doi || 'Not listed'}</span>
+                  {citation.ads_url && (
+                    <a
+                      className="inline-flex items-center gap-1 font-semibold text-sky-700 underline decoration-sky-300 underline-offset-2 dark:text-comet"
+                      href={citation.ads_url}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      ADS Link
+                      <ExternalLink className="h-3.5 w-3.5" />
+                    </a>
+                  )}
+                </div>
+              </article>
+            ))}
+          </div>
+        </div>
+      )}
+    </section>
+  )
+}
+
 export default function MessageBubble({ message }) {
   const isUser = message.role === 'user'
   const [copied, setCopied] = useState(false)
@@ -90,6 +183,7 @@ export default function MessageBubble({ message }) {
         </button>
 
         <MarkdownContent content={message.content} />
+        {!isUser && <ResearchRagPanel metadata={message.rag_metadata} />}
 
         {message.failed && (
           <p className="mt-2 text-xs font-medium text-red-700 dark:text-red-200">

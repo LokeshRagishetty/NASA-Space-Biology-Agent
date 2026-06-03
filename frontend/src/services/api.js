@@ -79,8 +79,11 @@ export async function clearConversations() {
   return data
 }
 
-export async function sendConversationMessage(conversationId, content) {
-  const { data } = await api.post(`/conversations/${conversationId}/messages`, { content })
+export async function sendConversationMessage(conversationId, content, options = {}) {
+  const { data } = await api.post(`/conversations/${conversationId}/messages`, {
+    content,
+    research_rag: Boolean(options.researchRag),
+  })
   return data
 }
 
@@ -182,10 +185,10 @@ export async function performRagQuery(query) {
   return data
 }
 
-export async function askQuestion(question, sessionId) {
+export async function askQuestion(question, sessionId, options = {}) {
   const { data } = await api.post(
     '/ask',
-    { question },
+    { question, research_rag: Boolean(options.researchRag) },
     {
       headers: {
         'X-Session-ID': sessionId,

@@ -74,10 +74,12 @@ class GoogleLoginRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=4000)
+    research_rag: bool = False
 
 
 class ChatResponse(BaseModel):
     answer: str
+    rag_metadata: Optional[dict[str, object]] = None
 
 
 class ChatHistoryResponse(BaseModel):
@@ -119,6 +121,7 @@ class ConversationUpdate(BaseModel):
 
 class ConversationMessageCreate(BaseModel):
     content: str = Field(..., min_length=1, max_length=4000)
+    research_rag: bool = False
 
     @field_validator("content")
     @classmethod
@@ -134,6 +137,7 @@ class ConversationMessageResponse(BaseModel):
     conversation_id: int
     role: Literal["user", "assistant"]
     content: str
+    rag_metadata: Optional[dict[str, object]] = None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
