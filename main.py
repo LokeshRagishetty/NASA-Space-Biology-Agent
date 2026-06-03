@@ -8,6 +8,13 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Optional
 
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(levelname)s: %(message)s"
+)
+
 import markdown
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Query, Request, UploadFile, status
@@ -80,6 +87,7 @@ from services.embedding_service import (
     regenerate_document_embeddings,
 )
 from services.rag_service import RagServiceError, answer_query_with_rag
+from services.research_memory_service import build_research_memory, resolve_research_query
 from services.research_rag_service import (
     answer_query_with_research_rag,
     retrieve_nasa_ads_papers,
@@ -834,6 +842,15 @@ def serialize_research_rag_metadata(response) -> str:
     metadata = response.to_dict()
     metadata["mode"] = "research_rag"
     return json.dumps(metadata)
+
+
+def answer_research_query_with_memory(question: str, messages: list[Message]):
+    memory = build_research_memory(messages)
+    resolved_query = resolve_research_query(question, memory)
+    return answer_query_with_research_rag(
+        resolved_query,
+        original_query=question,
+    )
 
 
 def get_user_document(db: Session, current_user: User, document_id: int) -> KnowledgeDocument:
@@ -1621,7 +1638,7 @@ def send_conversation_message(
 
         metadata_json = None
         if payload.research_rag:
-            research_response = answer_query_with_research_rag(payload.content)
+            research_response = answer_research_query_with_memory(payload.content, existing_messages)
             answer = research_response.answer
             metadata_json = serialize_research_rag_metadata(research_response)
         else:
@@ -1675,7 +1692,10 @@ async def ask(
         rag_metadata = None
         metadata_json = None
         if chat_request.research_rag:
-            research_response = answer_query_with_research_rag(chat_request.question)
+            existing_messages = []
+            if conversation_id is not None:
+                existing_messages = list(get_user_conversation(db, current_user, conversation_id).messages)
+            research_response = answer_research_query_with_memory(chat_request.question, existing_messages)
             answer = research_response.answer
             rag_metadata = research_response.to_dict()
             rag_metadata["mode"] = "research_rag"
