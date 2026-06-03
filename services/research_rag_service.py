@@ -5,6 +5,10 @@ from dataclasses import asdict, dataclass
 from typing import Optional
 from urllib.parse import quote
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 import requests
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
@@ -77,6 +81,8 @@ class ResearchRagResponse:
     context_length: int
     response_time_ms: float
     citations: list[ResearchCitation]
+    original_query: str
+    resolved_query: str
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -86,6 +92,8 @@ class ResearchRagResponse:
             "context_length": self.context_length,
             "response_time_ms": self.response_time_ms,
             "citations": [asdict(citation) for citation in self.citations],
+            "original_query": self.original_query,
+            "resolved_query": self.resolved_query,
         }
 
 
@@ -122,12 +130,22 @@ Answer:"""
 
 def retrieve_nasa_ads_papers(query: str, top_k: int = DEFAULT_RESEARCH_TOP_K) -> list[ResearchPaper]:
     cleaned_query = validate_rag_query(query)
+    logger.info("=" * 80)
+
+    logger.info("NASA ADS QUERY: %s", cleaned_query)
+
+    logger.info("=" * 80)
     token = os.getenv("NASA_ADS_TOKEN")
     if not token:
         raise RagRetrievalError("NASA ADS is not configured. Add NASA_ADS_TOKEN and restart the backend.")
 
+    ads_query = build_ads_query(cleaned_query)
+
+    logger.info("RESOLVED QUERY: %s", cleaned_query)
+    logger.info("ADS SEARCH QUERY: %s", ads_query)
+
     params = {
-        "q": build_ads_query(cleaned_query),
+    "q": ads_query,
         "fl": ADS_FIELDS,
         "rows": max(1, min(top_k, 10)),
         "sort": "score desc",
@@ -148,6 +166,15 @@ def retrieve_nasa_ads_papers(query: str, top_k: int = DEFAULT_RESEARCH_TOP_K) ->
         raise RagRetrievalError("NASA ADS retrieval failed. Please retry.", status_code=502) from exc
 
     docs = response.json().get("response", {}).get("docs", [])
+    logger.info(
+
+    "NASA ADS returned %d papers for query: %s",
+
+    len(docs),
+
+    cleaned_query,
+
+)
     return [paper for doc in docs if (paper := parse_ads_paper(doc))]
 
 
@@ -156,7 +183,11 @@ def build_ads_query(query: str) -> str:
     searchable = re.sub(r"\s+", " ", searchable).strip()
     if not searchable:
         searchable = query
-    return f"abstract:({searchable}) AND (database:astronomy OR database:physics)"
+    return (
+    f'(title:("{searchable}") OR abstract:("{searchable}") '
+    f'OR keyword:("{searchable}")) '
+    f'AND (database:astronomy OR database:physics)'
+)
 
 
 def parse_ads_paper(doc: dict) -> Optional[ResearchPaper]:
@@ -269,11 +300,13 @@ def build_research_rag_chain():
 def answer_query_with_research_rag(
     query: str,
     top_k: int = DEFAULT_RESEARCH_TOP_K,
+    original_query: Optional[str] = None,
 ) -> ResearchRagResponse:
     start_time = time.perf_counter()
     cleaned_query = validate_rag_query(query)
     papers = retrieve_nasa_ads_papers(cleaned_query, top_k=top_k)
     context_window = build_research_context(papers)
+    cleaned_original_query = validate_rag_query(original_query or cleaned_query)
 
     if context_window.papers_used == 0:
         return build_research_rag_response(
@@ -281,6 +314,8 @@ def answer_query_with_research_rag(
             answer=INSUFFICIENT_RESEARCH_CONTEXT_MESSAGE,
             papers_retrieved=len(papers),
             context_window=context_window,
+            original_query=cleaned_original_query,
+            resolved_query=cleaned_query,
         )
 
     try:
@@ -306,6 +341,8 @@ def answer_query_with_research_rag(
         answer=cleaned_answer,
         papers_retrieved=len(papers),
         context_window=context_window,
+        original_query=cleaned_original_query,
+        resolved_query=cleaned_query,
     )
 
 
@@ -314,6 +351,8 @@ def build_research_rag_response(
     answer: str,
     papers_retrieved: int,
     context_window: ResearchContextWindow,
+    original_query: str,
+    resolved_query: str,
 ) -> ResearchRagResponse:
     timed_response = build_rag_response(
         start_time,
@@ -334,4 +373,6 @@ def build_research_rag_response(
         context_length=timed_response.context_length,
         response_time_ms=timed_response.response_time_ms,
         citations=context_window.citations,
+        original_query=original_query,
+        resolved_query=resolved_query,
     )
