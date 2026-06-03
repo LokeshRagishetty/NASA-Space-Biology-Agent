@@ -1,4 +1,5 @@
 # main.py
+import json
 import os
 import re
 import secrets
@@ -8,7 +9,6 @@ from pathlib import Path
 from typing import Optional
 
 import markdown
-import requests
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -80,6 +80,10 @@ from services.embedding_service import (
     regenerate_document_embeddings,
 )
 from services.rag_service import RagServiceError, answer_query_with_rag
+from services.research_rag_service import (
+    answer_query_with_research_rag,
+    retrieve_nasa_ads_papers,
+)
 from services.semantic_search import (
     SemanticSearchError,
     search_documents,
@@ -186,6 +190,20 @@ def ensure_chunk_embedding_table() -> None:
     from models import ChunkEmbedding
 
     ChunkEmbedding.__table__.create(bind=engine, checkfirst=True)
+
+
+def ensure_message_metadata_column() -> None:
+    """Lightweight migration for per-message RAG metadata."""
+    inspector = inspect(engine)
+    if "messages" not in inspector.get_table_names():
+        return
+
+    columns = {column["name"] for column in inspector.get_columns("messages")}
+    if "metadata_json" in columns:
+        return
+
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE messages ADD COLUMN metadata_json TEXT"))
 
 
 def generate_conversation_title(prompt: str) -> str:
@@ -314,6 +332,7 @@ async def lifespan(app: FastAPI):
     ensure_knowledge_document_processing_columns()
     ensure_document_chunk_table()
     ensure_chunk_embedding_table()
+    ensure_message_metadata_column()
     try:
         initialize_vector_store()
         app.state.vector_store_startup_error = None
@@ -566,24 +585,22 @@ def nasa_search(query: str) -> str:
 
 # NASA ADS paper search
 def nasa_ads_search(query: str) -> str:
-    url = "https://api.adsabs.harvard.edu/v1/search/query"
-    headers = {"Authorization": f"Bearer {os.getenv('NASA_ADS_TOKEN')}"}
-    params = {
-        "q": f"abstract:({query}) AND (database:astronomy OR database:physics)",
-        "fl": "title,bibcode",
-        "rows": 2,
-    }
     try:
-        res = requests.get(url, headers=headers, params=params, timeout=10)
-        if res.status_code == 200:
-            docs = res.json().get("response", {}).get("docs", [])
-            if docs:
-                return "\n\n".join(
-                    [
-                        f"📄 **{d['title'][0]}**\n🔗 https://ui.adsabs.harvard.edu/abs/{d['bibcode']}"
-                        for d in docs
-                    ]
-                )
+        papers = retrieve_nasa_ads_papers(query, top_k=5)
+        if papers:
+            return "\n\n".join(
+                [
+                    (
+                        f"📄 **{paper.title}**\n"
+                        f"Authors: {', '.join(paper.authors[:5]) or 'Unknown'}\n"
+                        f"Year: {paper.year or 'Unknown'}\n"
+                        f"DOI: {paper.doi or 'Not listed'}\n"
+                        f"Abstract: {paper.abstract or 'Not listed'}\n"
+                        f"🔗 {paper.ads_url}"
+                    )
+                    for paper in papers
+                ]
+            )
         return "No relevant NASA papers found."
     except Exception as e:
         return f"NASA ADS search failed: {str(e)}"
@@ -754,6 +771,7 @@ def save_conversation_exchange(
     question: str,
     answer: str,
     conversation_id: Optional[int] = None,
+    metadata_json: Optional[str] = None,
 ) -> Conversation:
     if conversation_id is None:
         conversation = Conversation(
@@ -773,7 +791,12 @@ def save_conversation_exchange(
     db.add_all(
         [
             Message(conversation_id=conversation.id, role="user", content=question),
-            Message(conversation_id=conversation.id, role="assistant", content=answer),
+            Message(
+                conversation_id=conversation.id,
+                role="assistant",
+                content=answer,
+                metadata_json=metadata_json,
+            ),
         ]
     )
     return conversation
@@ -805,6 +828,12 @@ def hydrate_agent_session(session_id: str, messages: list[Message]) -> None:
             history.add_user_message(message.content)
         elif message.role == "assistant":
             history.add_ai_message(message.content)
+
+
+def serialize_research_rag_metadata(response) -> str:
+    metadata = response.to_dict()
+    metadata["mode"] = "research_rag"
+    return json.dumps(metadata)
 
 
 def get_user_document(db: Session, current_user: User, document_id: int) -> KnowledgeDocument:
@@ -1455,6 +1484,19 @@ def query_rag(
             retrieved_chunks=response.retrieved_chunks,
             context_length=response.context_length,
             response_time_ms=response.response_time_ms,
+            citations=[
+                {
+                    "document_id": citation.document_id,
+                    "filename": citation.filename,
+                    "chunk_index": citation.chunk_index,
+                    "chunk_id": citation.chunk_id,
+                }
+                for citation in response.citations
+            ],
+            semantic_matches=response.semantic_matches,
+            keyword_matches=response.keyword_matches,
+            merged_results=response.merged_results,
+            final_context_count=response.final_context_count,
         )
     except RagServiceError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
@@ -1577,11 +1619,19 @@ def send_conversation_message(
             conversation.title = generate_conversation_title(payload.content)
         conversation.updated_at = utc_now()
 
-        answer = generate_ai_answer(payload.content, session_id)
+        metadata_json = None
+        if payload.research_rag:
+            research_response = answer_query_with_research_rag(payload.content)
+            answer = research_response.answer
+            metadata_json = serialize_research_rag_metadata(research_response)
+        else:
+            answer = generate_ai_answer(payload.content, session_id)
+
         assistant_message = Message(
             conversation_id=conversation.id,
             role="assistant",
             content=answer,
+            metadata_json=metadata_json,
         )
         db.add(assistant_message)
         conversation.updated_at = utc_now()
@@ -1598,6 +1648,9 @@ def send_conversation_message(
     except HTTPException:
         db.rollback()
         raise
+    except RagServiceError as exc:
+        db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     except Exception as e:
         db.rollback()
         raise HTTPException(
@@ -1619,13 +1672,33 @@ async def ask(
     conversation_id = int(conversation_header) if conversation_header and conversation_header.isdigit() else None
 
     try:
-        answer = generate_ai_answer(chat_request.question, session_id)
+        rag_metadata = None
+        metadata_json = None
+        if chat_request.research_rag:
+            research_response = answer_query_with_research_rag(chat_request.question)
+            answer = research_response.answer
+            rag_metadata = research_response.to_dict()
+            rag_metadata["mode"] = "research_rag"
+            metadata_json = json.dumps(rag_metadata)
+        else:
+            answer = generate_ai_answer(chat_request.question, session_id)
+
         save_chat(db, current_user.id, chat_request.question, answer)
-        save_conversation_exchange(db, current_user, chat_request.question, answer, conversation_id)
+        save_conversation_exchange(
+            db,
+            current_user,
+            chat_request.question,
+            answer,
+            conversation_id,
+            metadata_json=metadata_json,
+        )
         db.commit()
-        return {"answer": answer}
+        return {"answer": answer, "rag_metadata": rag_metadata}
     except HTTPException:
         raise
+    except RagServiceError as exc:
+        db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Agent error: {str(e)}") from e

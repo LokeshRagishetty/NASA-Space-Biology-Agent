@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
-import { AlertCircle, Bot, RefreshCw, Send, Sparkles } from 'lucide-react'
+import { AlertCircle, Bot, FlaskConical, RefreshCw, Send, Sparkles } from 'lucide-react'
 import MessageBubble from '../components/MessageBubble'
 import PageTransition from '../components/PageTransition'
 import TypingIndicator from '../components/TypingIndicator'
@@ -48,10 +48,15 @@ export default function DashboardPage() {
   const [creatingChat, setCreatingChat] = useState(false)
   const [error, setError] = useState('')
   const [retryPrompt, setRetryPrompt] = useState('')
+  const [researchRagMode, setResearchRagMode] = useState(true)
   const scrollRef = useRef(null)
   const textareaRef = useRef(null)
   const activeConversationKey = useMemo(
     () => `nasa_agent_active_conversation_id_${user?.id || 'guest'}`,
+    [user?.id],
+  )
+  const researchRagModeKey = useMemo(
+    () => `nasa_agent_research_rag_mode_${user?.id || 'guest'}`,
     [user?.id],
   )
   const activeConversation = useMemo(
@@ -111,8 +116,21 @@ export default function DashboardPage() {
   }, [loadConversations])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setResearchRagMode(localStorage.getItem(researchRagModeKey) !== 'false')
+  }, [researchRagModeKey])
+
+  useEffect(() => {
     scrollRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
   }, [messages, submitting])
+
+  const toggleResearchRagMode = useCallback(() => {
+    setResearchRagMode((current) => {
+      const next = !current
+      localStorage.setItem(researchRagModeKey, String(next))
+      return next
+    })
+  }, [researchRagModeKey])
 
   const selectChat = useCallback(
     async (conversation) => {
@@ -285,7 +303,9 @@ export default function DashboardPage() {
         },
       ])
 
-      const data = await sendConversationMessage(conversationId, trimmedPrompt)
+      const data = await sendConversationMessage(conversationId, trimmedPrompt, {
+        researchRag: researchRagMode,
+      })
       const updatedConversation = normalizeConversation(data.conversation)
       replaceConversation(updatedConversation, { promote: true })
       setActiveConversationId(updatedConversation.id)
@@ -320,9 +340,9 @@ export default function DashboardPage() {
   }
 
   const samplePrompts = [
-    'Summarize NASA research on plants in microgravity',
-    'Find papers about radiation exposure and astronauts',
-    'Explain lunar habitat biology risks',
+    'How does microgravity affect plant growth?',
+    'How does space radiation affect DNA?',
+    'What causes bone density loss in astronauts?',
   ]
 
   return (
@@ -342,15 +362,43 @@ export default function DashboardPage() {
                 Ask about space biology, microgravity, lunar missions, radiation biology, and NASA research.
               </p>
             </div>
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={newChat}
-              disabled={creatingChat}
-            >
-              <RefreshCw className={`h-4 w-4 ${creatingChat ? 'animate-spin' : ''}`} />
-              New chat
-            </button>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+              <button
+                type="button"
+                role="switch"
+                aria-checked={researchRagMode}
+                className={`inline-flex h-11 items-center gap-2 rounded-2xl border px-3 text-sm font-semibold transition ${
+                  researchRagMode
+                    ? 'border-sky-300 bg-sky-50 text-sky-800 dark:border-comet/40 dark:bg-comet/10 dark:text-comet'
+                    : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-white/10 dark:bg-white/[0.06] dark:text-slate-200 dark:hover:bg-white/[0.10]'
+                }`}
+                onClick={toggleResearchRagMode}
+              >
+                <FlaskConical className="h-4 w-4" />
+                Research RAG Mode
+                <span
+                  className={`ml-1 h-5 w-9 rounded-full p-0.5 transition ${
+                    researchRagMode ? 'bg-sky-500 dark:bg-comet' : 'bg-slate-300 dark:bg-slate-700'
+                  }`}
+                  aria-hidden="true"
+                >
+                  <span
+                    className={`block h-4 w-4 rounded-full bg-white shadow transition ${
+                      researchRagMode ? 'translate-x-4' : 'translate-x-0'
+                    }`}
+                  />
+                </span>
+              </button>
+              <button
+                type="button"
+                className="secondary-button h-11 py-0"
+                onClick={newChat}
+                disabled={creatingChat}
+              >
+                <RefreshCw className={`h-4 w-4 ${creatingChat ? 'animate-spin' : ''}`} />
+                New chat
+              </button>
+            </div>
           </div>
         </section>
 

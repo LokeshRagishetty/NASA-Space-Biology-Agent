@@ -874,6 +874,17 @@ function SearchPanel({
 
 function TestRagPanel({ error, loading, onSubmit, result, searchable }) {
   const [query, setQuery] = useState('')
+  const citations = result?.citations ?? []
+  const metricItems = result
+    ? [
+        { label: 'Semantic Matches', value: result.semantic_matches || 0 },
+        { label: 'Keyword Matches', value: result.keyword_matches || 0 },
+        { label: 'Merged Results', value: result.merged_results || 0 },
+        { label: 'Final Context Count', value: result.final_context_count || result.retrieved_chunks || 0 },
+        { label: 'Context Length', value: result.context_length || 0 },
+        { label: 'Response Time', value: result.response_time_ms || 0, suffix: ' ms' },
+      ]
+    : []
 
   const handleSubmit = (event) => {
     event.preventDefault()
@@ -928,25 +939,17 @@ function TestRagPanel({ error, loading, onSubmit, result, searchable }) {
 
         {result && (
           <div className="space-y-4 border-t border-slate-200 pt-4 dark:border-white/10">
-            <div className="grid gap-3 sm:grid-cols-3">
-              <div className="min-w-0 border-l border-slate-200 pl-3 dark:border-white/10">
-                <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Retrieved Chunks</p>
-                <p className="mt-1 text-lg font-semibold text-slate-950 dark:text-white">
-                  {formatNumber(result.retrieved_chunks || 0)}
-                </p>
-              </div>
-              <div className="min-w-0 border-l border-slate-200 pl-3 dark:border-white/10">
-                <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Context Length</p>
-                <p className="mt-1 text-lg font-semibold text-slate-950 dark:text-white">
-                  {formatNumber(result.context_length || 0)}
-                </p>
-              </div>
-              <div className="min-w-0 border-l border-slate-200 pl-3 dark:border-white/10">
-                <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Response Time</p>
-                <p className="mt-1 text-lg font-semibold text-slate-950 dark:text-white">
-                  {(result.response_time_ms || 0).toFixed(0)} ms
-                </p>
-              </div>
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              {metricItems.map((item) => (
+                <div key={item.label} className="min-w-0 border-l border-slate-200 pl-3 dark:border-white/10">
+                  <p className="text-xs font-medium text-slate-500 dark:text-slate-400">{item.label}</p>
+                  <p className="mt-1 text-lg font-semibold text-slate-950 dark:text-white">
+                    {item.suffix
+                      ? `${Number(item.value).toFixed(0)}${item.suffix}`
+                      : formatNumber(item.value)}
+                  </p>
+                </div>
+              ))}
             </div>
 
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-white/10 dark:bg-white/[0.04]">
@@ -955,6 +958,27 @@ function TestRagPanel({ error, loading, onSubmit, result, searchable }) {
                 {result.answer}
               </pre>
             </div>
+
+            {citations.length > 0 && (
+              <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-white/10 dark:bg-white/[0.03]">
+                <p className="mb-3 text-sm font-semibold text-slate-950 dark:text-white">Sources Used</p>
+                <ul className="space-y-2">
+                  {citations.map((citation) => (
+                    <li
+                      key={`${citation.document_id}-${citation.chunk_id}`}
+                      className="flex flex-col gap-1 rounded-xl border border-slate-200 px-3 py-2 text-sm dark:border-white/10 sm:flex-row sm:items-center sm:justify-between"
+                    >
+                      <span className="min-w-0 truncate font-medium text-slate-800 dark:text-slate-100">
+                        {citation.filename}
+                      </span>
+                      <span className="shrink-0 text-xs font-semibold text-slate-500 dark:text-slate-400">
+                        Chunk {(citation.chunk_index || 0) + 1}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
         )}
       </form>
