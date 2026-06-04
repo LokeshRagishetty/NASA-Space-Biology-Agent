@@ -231,20 +231,53 @@ def resolve_research_query(
     memory: ResearchConversationMemory,
 ) -> str:
     cleaned_query = validate_rag_query(query)
+
     if not should_resolve_research_query(cleaned_query, memory):
         return cleaned_query
 
+    # STEP 1: Try fallback FIRST
+    fallback_query = build_fallback_resolved_query(
+        cleaned_query,
+        memory,
+    )
+
+    if is_good_fallback_query(
+        fallback_query,
+        cleaned_query,
+    ):
+        logger.info(
+            "Using fallback memory resolution: %r -> %r",
+            cleaned_query,
+            fallback_query,
+        )
+        return fallback_query
+
+    # STEP 2: Only use Groq if fallback wasn't good enough
     try:
-        rewritten = rewrite_query_with_groq(cleaned_query, memory.context)
+        rewritten = rewrite_query_with_groq(
+            cleaned_query,
+            memory.context,
+        )
     except Exception as exc:
-        logger.warning("Research query rewrite failed; using fallback resolver: %s", exc)
-        rewritten = build_fallback_resolved_query(cleaned_query, memory)
+        logger.warning(
+
+        "Research query rewrite failed; using fallback resolver: %s",
+
+        exc,
+
+    )
+        rewritten = fallback_query
 
     if should_use_fallback_rewrite(rewritten):
-        logger.info("Research query rewrite was too verbose; using fallback resolver.")
-        rewritten = build_fallback_resolved_query(cleaned_query, memory)
+        logger.info(
+            "Research query rewrite was too verbose; using fallback resolver."
+        )
+        rewritten = fallback_query
 
-    resolved = validate_resolved_query(rewritten, cleaned_query)
+    resolved = validate_resolved_query(
+        rewritten,
+        cleaned_query,
+    )
 
     logger.info("=" * 80)
     logger.info("ORIGINAL QUERY: %s", cleaned_query)
@@ -252,7 +285,11 @@ def resolve_research_query(
     logger.info("=" * 80)
 
     if resolved != cleaned_query:
-        logger.info("Resolved research query %r -> %r", cleaned_query, resolved)
+        logger.info(
+            "Resolved research query %r -> %r",
+            cleaned_query,
+            resolved,
+        )
 
     return resolved
 
@@ -302,6 +339,17 @@ def should_use_fallback_rewrite(rewritten: str) -> bool:
         or any(phrase in lowered for phrase in banned_phrases)
     )
 
+def is_good_fallback_query(
+    fallback_query: str,
+    original_query: str,
+) -> bool:
+    if not fallback_query:
+        return False
+
+    if fallback_query.strip().lower() == original_query.strip().lower():
+        return False
+
+    return len(fallback_query.split()) >= 2
 
 def build_fallback_resolved_query(
     query: str,

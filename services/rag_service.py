@@ -184,6 +184,7 @@ def answer_query_with_rag(
     model: Optional[str] = None,
     temperature: Optional[float] = None,
     max_tokens: Optional[int] = None,
+    document_id: Optional[int] = None,
 ) -> RagResponse:
     start_time = time.perf_counter()
     cleaned_query = validate_rag_query(query)
@@ -194,6 +195,7 @@ def answer_query_with_rag(
             query=cleaned_query,
             user_id=user_id,
             top_k=top_k or DEFAULT_TOP_K,
+            document_id=document_id,
         )
     except HybridRetrievalError as exc:
         raise RagRetrievalError(str(exc), status_code=getattr(exc, "status_code", 503)) from exc
@@ -206,40 +208,7 @@ def answer_query_with_rag(
             context_window,
             retrieval_response,
         )
-    query_lower = cleaned_query.lower()
-
-    if is_extraction_query(cleaned_query):
-        EMAIL_PROMPT = PromptTemplate.from_template("""
-            Extract and list every email address found in the context.
-
-            Return only the email addresses.
-            Do not add explanations.
-
-            CONTEXT:
-            {context}
-
-            EMAILS:
-            """)
-
-    chain = EMAIL_PROMPT | get_groq_llm(
-        model=model,
-        temperature=0,
-        max_tokens=max_tokens
-    ) | StrOutputParser()
-
-    answer = chain.invoke({
-        "context": context_window.context
-    })
-
-    cleaned_answer = (answer or "").strip() or INSUFFICIENT_CONTEXT_MESSAGE
-
-    return build_rag_response(
-        start_time,
-        cleaned_answer,
-        context_window,
-        retrieval_response,
-
-    )
+    
     try:
         llm = get_groq_llm(
             model=model,

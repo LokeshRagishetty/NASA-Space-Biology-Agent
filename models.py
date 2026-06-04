@@ -1,9 +1,9 @@
 import json
 from datetime import datetime, timezone
 
-from typing import Optional
+from typing import Any, Optional
 
-from sqlalchemy import BigInteger, CheckConstraint, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, CheckConstraint, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
@@ -193,6 +193,7 @@ class DocumentChunk(Base):
 
 class ChunkEmbedding(Base):
     __tablename__ = "chunk_embeddings"
+
     __table_args__ = (
         UniqueConstraint("chunk_id", name="uq_chunk_embeddings_chunk_id"),
     )
@@ -209,3 +210,77 @@ class ChunkEmbedding(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True, nullable=False)
 
     chunk: Mapped[DocumentChunk] = relationship("DocumentChunk", back_populates="embedding")
+
+
+class LibraryConversation(Base):
+    __tablename__ = "library_conversations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    title: Mapped[str] = mapped_column(String(255), default="New Chat", nullable=False)
+    document_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("knowledge_documents.id", ondelete="SET NULL"),
+        index=True,
+        nullable=True,
+    )
+    selected_document_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("knowledge_documents.id", ondelete="SET NULL"),
+        index=True,
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+        index=True,
+        nullable=False,
+    )
+
+    messages: Mapped[list["LibraryMessage"]] = relationship(
+        "LibraryMessage",
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+        order_by="LibraryMessage.created_at",
+    )
+
+
+class LibraryMessage(Base):
+    __tablename__ = "library_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("library_conversations.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    citations_json: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        index=True,
+        nullable=False,
+    )
+
+    conversation: Mapped[LibraryConversation] = relationship(
+        "LibraryConversation",
+        back_populates="messages",
+    )
+
+    @property
+    def citations(self) -> list[dict]:
+        if isinstance(self.citations_json, list):
+            return [item for item in self.citations_json if isinstance(item, dict)]
+        if isinstance(self.citations_json, dict):
+            return [self.citations_json]
+        return []
+
+
+
+# (Removed duplicate/broken LibraryConversation/LibraryMessage declarations)

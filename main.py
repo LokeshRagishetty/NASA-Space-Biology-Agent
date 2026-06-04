@@ -42,8 +42,19 @@ from auth import (
     verify_firebase_id_token,
 )
 from database import Base, SessionLocal, engine, get_db
-from models import ChatHistory, Conversation, KnowledgeDocument, Message, User, utc_now
+from models import (
+    ChatHistory,
+    Conversation,
+    KnowledgeDocument,
+    LibraryConversation,
+    LibraryMessage,
+    Message,
+    User,
+    utc_now,
+)
 from schemas import (
+
+
     ChatHistoryResponse,
     ChatRequest,
     ChatResponse,
@@ -62,6 +73,12 @@ from schemas import (
     MessageResponse,
     RagQueryRequest,
     RagQueryResponse,
+    LibraryConversationListItem,
+    LibraryConversationRenameRequest,
+    LibraryConversationResponse,
+    LibraryAskRequest,
+    LibraryAskResponse,
+
     SearchRequest,
     SearchResponse,
     SearchStatisticsResponse,
@@ -87,9 +104,12 @@ from services.embedding_service import (
     regenerate_document_embeddings,
 )
 from services.rag_service import RagServiceError, answer_query_with_rag
+
+from sqlalchemy.orm import selectinload
+
+from services.research_intelligence_service import answer_query_with_research_intelligence
 from services.research_memory_service import build_research_memory, resolve_research_query
 from services.research_rag_service import (
-    answer_query_with_research_rag,
     retrieve_nasa_ads_papers,
 )
 from services.semantic_search import (
@@ -212,6 +232,57 @@ def ensure_message_metadata_column() -> None:
 
     with engine.begin() as connection:
         connection.execute(text("ALTER TABLE messages ADD COLUMN metadata_json TEXT"))
+
+
+def ensure_library_conversation_tables() -> None:
+    """Create/update the dedicated Knowledge Library conversation tables."""
+    LibraryConversation.__table__.create(bind=engine, checkfirst=True)
+    LibraryMessage.__table__.create(bind=engine, checkfirst=True)
+
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    dialect = engine.dialect.name
+    datetime_type = "TIMESTAMP WITH TIME ZONE" if dialect == "postgresql" else "DATETIME"
+    json_type = "JSON" if dialect == "postgresql" else "JSON"
+
+    if "library_conversations" in tables:
+        columns = {column["name"] for column in inspector.get_columns("library_conversations")}
+        statements = []
+        if "document_id" not in columns:
+            statements.append(
+                "ALTER TABLE library_conversations "
+                "ADD COLUMN document_id INTEGER REFERENCES knowledge_documents(id) ON DELETE SET NULL"
+            )
+        if "selected_document_id" not in columns:
+            statements.append(
+                "ALTER TABLE library_conversations "
+                "ADD COLUMN selected_document_id INTEGER REFERENCES knowledge_documents(id) ON DELETE SET NULL"
+            )
+        if "created_at" not in columns:
+            statements.append(f"ALTER TABLE library_conversations ADD COLUMN created_at {datetime_type}")
+        if "updated_at" not in columns:
+            statements.append(f"ALTER TABLE library_conversations ADD COLUMN updated_at {datetime_type}")
+
+        with engine.begin() as connection:
+            for statement in statements:
+                connection.execute(text(statement))
+            connection.execute(
+                text(
+                    """
+                    UPDATE library_conversations
+                    SET
+                        selected_document_id = COALESCE(selected_document_id, document_id),
+                        created_at = COALESCE(created_at, CURRENT_TIMESTAMP),
+                        updated_at = COALESCE(updated_at, CURRENT_TIMESTAMP)
+                    """
+                )
+            )
+
+    if "library_messages" in tables:
+        columns = {column["name"] for column in inspector.get_columns("library_messages")}
+        if "citations_json" not in columns:
+            with engine.begin() as connection:
+                connection.execute(text(f"ALTER TABLE library_messages ADD COLUMN citations_json {json_type}"))
 
 
 def generate_conversation_title(prompt: str) -> str:
@@ -341,6 +412,7 @@ async def lifespan(app: FastAPI):
     ensure_document_chunk_table()
     ensure_chunk_embedding_table()
     ensure_message_metadata_column()
+    ensure_library_conversation_tables()
     try:
         initialize_vector_store()
         app.state.vector_store_startup_error = None
@@ -699,6 +771,7 @@ agent = get_agent()
 
 
 def generate_ai_answer(question: str, session_id: str) -> str:
+
     # 1. Handle math.
     if re.search(r"\d+[\+\-\*\/]\d+", question):
         result = safe_math(question)
@@ -841,13 +914,15 @@ def hydrate_agent_session(session_id: str, messages: list[Message]) -> None:
 def serialize_research_rag_metadata(response) -> str:
     metadata = response.to_dict()
     metadata["mode"] = "research_rag"
+    metadata.setdefault("research_mode", "Standard Research RAG")
+    metadata.setdefault("research_mode_key", "standard")
     return json.dumps(metadata)
 
 
 def answer_research_query_with_memory(question: str, messages: list[Message]):
     memory = build_research_memory(messages)
     resolved_query = resolve_research_query(question, memory)
-    return answer_query_with_research_rag(
+    return answer_query_with_research_intelligence(
         resolved_query,
         original_query=question,
     )
@@ -865,6 +940,37 @@ def get_user_document(db: Session, current_user: User, document_id: int) -> Know
     if document is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found.")
     return document
+
+
+def get_user_library_conversation(
+    db: Session,
+    current_user: User,
+    conversation_id: int,
+) -> LibraryConversation:
+    conversation = (
+        db.query(LibraryConversation)
+        .options(selectinload(LibraryConversation.messages))
+        .filter(
+            LibraryConversation.id == conversation_id,
+            LibraryConversation.user_id == current_user.id,
+        )
+        .first()
+    )
+    if conversation is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Library conversation not found.")
+    return conversation
+
+
+def rag_citations_to_dicts(citations) -> list[dict[str, object]]:
+    return [
+        {
+            "document_id": citation.document_id,
+            "filename": citation.filename,
+            "chunk_index": citation.chunk_index,
+            "chunk_id": citation.chunk_id,
+        }
+        for citation in citations
+    ]
 
 
 def process_knowledge_document_task(document_id: int) -> None:
@@ -1519,6 +1625,173 @@ def query_rag(
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
 
+@app.get(
+    "/library/conversations",
+    response_model=list[LibraryConversationListItem],
+    tags=["knowledge-library"],
+)
+def list_library_conversations(
+    limit: int = Query(80, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return (
+        db.query(LibraryConversation)
+        .filter(LibraryConversation.user_id == current_user.id)
+        .order_by(LibraryConversation.updated_at.desc(), LibraryConversation.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
+
+@app.get(
+    "/library/conversations/{conversation_id}",
+    response_model=LibraryConversationResponse,
+    tags=["knowledge-library"],
+)
+def read_library_conversation(
+    conversation_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return get_user_library_conversation(db, current_user, conversation_id)
+
+
+@app.patch(
+    "/library/conversations/{conversation_id}",
+    response_model=LibraryConversationResponse,
+    tags=["knowledge-library"],
+)
+def rename_library_conversation(
+    conversation_id: int,
+    payload: LibraryConversationRenameRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    conversation = get_user_library_conversation(db, current_user, conversation_id)
+    conversation.title = payload.title
+    conversation.updated_at = utc_now()
+
+    try:
+        db.commit()
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not rename library conversation.",
+        ) from exc
+
+    return get_user_library_conversation(db, current_user, conversation_id)
+
+
+@app.delete(
+    "/library/conversations/{conversation_id}",
+    response_model=MessageResponse,
+    tags=["knowledge-library"],
+)
+def delete_library_conversation(
+    conversation_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    conversation = get_user_library_conversation(db, current_user, conversation_id)
+
+    try:
+        db.delete(conversation)
+        db.commit()
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not delete library conversation.",
+        ) from exc
+
+    return {"message": "Library conversation deleted."}
+
+
+@app.post(
+    "/library/rag/ask",
+    response_model=LibraryAskResponse,
+    tags=["knowledge-library"],
+)
+def ask_library_question(
+    payload: LibraryAskRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    document = get_user_document(db, current_user, payload.document_id)
+    ensure_document_chunks_available(document)
+
+    conversation = None
+    first_user_message = True
+    if payload.conversation_id is not None:
+        conversation = get_user_library_conversation(db, current_user, payload.conversation_id)
+        first_user_message = not any(message.role == "user" for message in conversation.messages)
+
+    try:
+        rag_response = answer_query_with_rag(
+            db=db,
+            query=payload.question,
+            user_id=current_user.id,
+            top_k=payload.top_k,
+            document_id=document.id,
+        )
+    except RagServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+    citations = rag_citations_to_dicts(rag_response.citations)
+
+    try:
+        if conversation is None:
+            conversation = LibraryConversation(
+                user_id=current_user.id,
+                title=generate_conversation_title(payload.question),
+                document_id=document.id,
+                selected_document_id=document.id,
+            )
+            db.add(conversation)
+            db.flush()
+        elif first_user_message or conversation.title in {"New Chat", "New chat"}:
+            conversation.title = generate_conversation_title(payload.question)
+
+        conversation.document_id = document.id
+        conversation.selected_document_id = document.id
+        conversation.updated_at = utc_now()
+
+        db.add_all(
+            [
+                LibraryMessage(
+                    conversation_id=conversation.id,
+                    role="user",
+                    content=payload.question,
+                ),
+                LibraryMessage(
+                    conversation_id=conversation.id,
+                    role="assistant",
+                    content=rag_response.answer,
+                    citations_json=citations,
+                ),
+            ]
+        )
+        db.commit()
+        db.refresh(conversation)
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not save library conversation.",
+        ) from exc
+
+    return LibraryAskResponse(
+        conversation_id=conversation.id,
+        title=conversation.title,
+        answer=rag_response.answer,
+        citations=citations,
+    )
+
+
 @app.post(
     "/conversations",
     response_model=ConversationResponse,
@@ -1572,6 +1845,7 @@ def clear_conversations(
 
 @app.get("/conversations/{conversation_id}", response_model=ConversationResponse, tags=["conversations"])
 def read_conversation(
+
     conversation_id: int,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -1699,6 +1973,8 @@ async def ask(
             answer = research_response.answer
             rag_metadata = research_response.to_dict()
             rag_metadata["mode"] = "research_rag"
+            rag_metadata.setdefault("research_mode", "Standard Research RAG")
+            rag_metadata.setdefault("research_mode_key", "standard")
             metadata_json = json.dumps(rag_metadata)
         else:
             answer = generate_ai_answer(chat_request.question, session_id)

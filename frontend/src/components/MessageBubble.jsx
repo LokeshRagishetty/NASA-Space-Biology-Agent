@@ -69,10 +69,21 @@ function ResearchRagPanel({ metadata }) {
   const papersUsed = Number(metadata.papers_used || 0)
   const contextLength = Number(metadata.context_length || 0)
   const responseTime = Number(metadata.response_time_ms || 0)
+  const queryExpansionUsed = Boolean(metadata.query_expansion_used)
+  const expandedQueries = Array.isArray(metadata.expanded_queries) ? metadata.expanded_queries : []
+  const researchMode = metadata.research_mode || 'Standard Research RAG'
 
   return (
     <section className="mt-4 border-t border-slate-200 pt-4 dark:border-white/10">
-      <div className="grid gap-2 text-xs sm:grid-cols-3">
+      <div className="grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-4">
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 dark:border-white/10 dark:bg-white/[0.04]">
+          <p className="font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">
+            Mode
+          </p>
+          <p className="mt-1 text-base font-semibold text-slate-950 dark:text-white">
+            {researchMode}
+          </p>
+        </div>
         <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 dark:border-white/10 dark:bg-white/[0.04]">
           <p className="font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">
             Papers Retrieved
@@ -105,7 +116,7 @@ function ResearchRagPanel({ metadata }) {
         <div className="mt-4">
           <h3 className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
             <FileText className="h-4 w-4" />
-            Paper Citations
+            Paper Citations ({citations.length})
           </h3>
           <div className="space-y-2">
             {citations.map((citation, index) => (
@@ -122,6 +133,9 @@ function ResearchRagPanel({ metadata }) {
                 <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-slate-500 dark:text-slate-400">
                   <span>Year: {citation.year || 'Unknown'}</span>
                   <span>DOI: {citation.doi || 'Not listed'}</span>
+                  {typeof citation.citation_count === 'number' && (
+                    <span>Citations: {formatNumber(citation.citation_count)}</span>
+                  )}
                   {citation.ads_url && (
                     <a
                       className="inline-flex items-center gap-1 font-semibold text-sky-700 underline decoration-sky-300 underline-offset-2 dark:text-comet"
@@ -139,6 +153,22 @@ function ResearchRagPanel({ metadata }) {
           </div>
         </div>
       )}
+
+      <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs leading-5 dark:border-white/10 dark:bg-white/[0.04]">
+        <p className="font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">
+          Query Expansion Used: {queryExpansionUsed ? 'Yes' : 'No'}
+        </p>
+        {expandedQueries.length > 0 && (
+          <div className="mt-2">
+            <p className="font-semibold text-slate-700 dark:text-slate-200">Expanded Queries:</p>
+            <ul className="mt-1 list-disc space-y-1 pl-4 text-slate-600 dark:text-slate-300">
+              {expandedQueries.map((query) => (
+                <li key={query}>{query}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
     </section>
   )
 }

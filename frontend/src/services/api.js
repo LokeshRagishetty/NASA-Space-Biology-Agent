@@ -1,6 +1,7 @@
 import axios from 'axios'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
+const KNOWLEDGE_SEARCH_TOP_K = 5
 
 export const api = axios.create({
   baseURL: API_BASE_URL,
@@ -165,18 +166,43 @@ export async function syncKnowledgeDocumentVectors(documentId) {
   return data
 }
 
-export async function performSemanticSearch(query, topK) {
-  const { data } = await api.post('/search', { query, top_k: topK })
+export async function performSemanticSearch(query) {
+  const { data } = await api.post('/search', { query, top_k: KNOWLEDGE_SEARCH_TOP_K })
   return data
 }
 
-export async function performDocumentSemanticSearch(documentId, query, topK) {
-  const { data } = await api.post(`/documents/${documentId}/search`, { query, top_k: topK })
+export async function performDocumentSemanticSearch(documentId, query) {
+  const { data } = await api.post(`/documents/${documentId}/search`, { query, top_k: KNOWLEDGE_SEARCH_TOP_K })
   return data
 }
 
 export async function getSearchStatistics() {
   const { data } = await api.get('/search-statistics')
+  return data
+}
+
+export async function getLibraryConversations() {
+  const { data } = await api.get('/library/conversations')
+  return data
+}
+
+export async function getLibraryConversation(conversationId) {
+  const { data } = await api.get(`/library/conversations/${conversationId}`)
+  return data
+}
+
+export async function renameLibraryConversation(conversationId, title) {
+  const { data } = await api.patch(`/library/conversations/${conversationId}`, { title })
+  return data
+}
+
+export async function deleteLibraryConversation(conversationId) {
+  const { data } = await api.delete(`/library/conversations/${conversationId}`)
+  return data
+}
+
+export async function askLibraryQuestion(payload) {
+  const { data } = await api.post('/library/rag/ask', payload)
   return data
 }
 
