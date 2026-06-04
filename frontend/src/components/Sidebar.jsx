@@ -58,6 +58,24 @@ function getPreview(conversation) {
   return stripHtml(lastMessage?.content || 'No messages yet.')
 }
 
+const modeBadgeLabels = {
+  'Standard Research RAG': 'Standard',
+  Comparison: 'Compare',
+  'Research Gap Analysis': 'Gap Analysis',
+  'Evidence Ranking': 'Evidence',
+  'Contradiction Analysis': 'Contradiction',
+  'Report Generation': 'Report',
+  'Literature Review': 'Review',
+}
+
+function getModeBadge(conversation) {
+  const researchMessage = [...(conversation.messages || [])]
+    .reverse()
+    .find((message) => message.role === 'assistant' && message.rag_metadata?.mode === 'research_rag')
+  const mode = researchMessage?.rag_metadata?.research_mode
+  return mode ? modeBadgeLabels[mode] || mode : ''
+}
+
 export default function Sidebar({
   history,
   loading,
@@ -204,6 +222,7 @@ export default function Sidebar({
               {filteredHistory.map((item) => {
                 const active = activeChatId === item.id
                 const preview = getPreview(item)
+                const modeBadge = getModeBadge(item)
 
                 return (
                   <div
@@ -257,8 +276,15 @@ export default function Sidebar({
                         </form>
                       ) : (
                         <>
-                          <span className="line-clamp-1 text-sm font-medium text-slate-800 dark:text-slate-200">
-                            <HighlightText text={item.title || 'New chat'} query={debouncedSearch} />
+                          <span className="flex min-w-0 items-center gap-2">
+                            <span className="line-clamp-1 min-w-0 text-sm font-medium text-slate-800 dark:text-slate-200">
+                              <HighlightText text={item.title || 'New chat'} query={debouncedSearch} />
+                            </span>
+                            {modeBadge && (
+                              <span className="shrink-0 rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-sky-700 dark:border-comet/30 dark:bg-comet/10 dark:text-comet">
+                                {modeBadge}
+                              </span>
+                            )}
                           </span>
                           <span className="mt-1 line-clamp-1 text-xs text-slate-500">
                             <HighlightText text={preview} query={debouncedSearch} />

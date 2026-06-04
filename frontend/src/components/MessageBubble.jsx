@@ -74,79 +74,49 @@ function ResearchRagPanel({ metadata }) {
   const researchMode = metadata.research_mode || 'Standard Research RAG'
 
   return (
-    <section className="mt-4 border-t border-slate-200 pt-4 dark:border-white/10">
-      <div className="grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-4">
-        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 dark:border-white/10 dark:bg-white/[0.04]">
-          <p className="font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">
-            Mode
-          </p>
-          <p className="mt-1 text-base font-semibold text-slate-950 dark:text-white">
-            {researchMode}
-          </p>
-        </div>
-        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 dark:border-white/10 dark:bg-white/[0.04]">
-          <p className="font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">
-            Papers Retrieved
-          </p>
-          <p className="mt-1 text-base font-semibold text-slate-950 dark:text-white">
-            {formatNumber(papersRetrieved)}
-            {papersUsed ? <span className="text-xs font-medium text-slate-500"> / {papersUsed} used</span> : null}
-          </p>
-        </div>
-        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 dark:border-white/10 dark:bg-white/[0.04]">
-          <p className="font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">
-            Context Length
-          </p>
-          <p className="mt-1 text-base font-semibold text-slate-950 dark:text-white">
-            {formatNumber(contextLength)}
-          </p>
-        </div>
-        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 dark:border-white/10 dark:bg-white/[0.04]">
-          <p className="flex items-center gap-1 font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">
-            <Timer className="h-3.5 w-3.5" />
-            Response Time
-          </p>
-          <p className="mt-1 text-base font-semibold text-slate-950 dark:text-white">
-            {formatNumber(responseTime)} ms
-          </p>
-        </div>
-      </div>
-
+    <section className="mt-5 border-t border-slate-200 pt-5 dark:border-white/10">
       {citations.length > 0 && (
-        <div className="mt-4">
-          <h3 className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
+        <div>
+          <h3 className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
             <FileText className="h-4 w-4" />
-            Paper Citations ({citations.length})
+            Sources ({citations.length})
           </h3>
-          <div className="space-y-2">
+          <div className="space-y-3">
             {citations.map((citation, index) => (
               <article
                 key={`${citation.ads_url || citation.title}-${index}`}
-                className="rounded-2xl border border-slate-200 bg-white px-3 py-3 text-xs leading-5 dark:border-white/10 dark:bg-white/[0.04]"
+                className="rounded-lg border border-slate-200 bg-white px-4 py-3.5 text-xs leading-5 dark:border-white/10 dark:bg-white/[0.04]"
               >
-                <h4 className="text-sm font-semibold leading-5 text-slate-950 dark:text-white">
-                  {citation.title || 'Untitled paper'}
-                </h4>
-                <p className="mt-1 text-slate-600 dark:text-slate-300">
-                  {formatAuthors(citation.authors)}
-                </p>
-                <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-slate-500 dark:text-slate-400">
-                  <span>Year: {citation.year || 'Unknown'}</span>
-                  <span>DOI: {citation.doi || 'Not listed'}</span>
-                  {typeof citation.citation_count === 'number' && (
-                    <span>Citations: {formatNumber(citation.citation_count)}</span>
-                  )}
-                  {citation.ads_url && (
-                    <a
-                      className="inline-flex items-center gap-1 font-semibold text-sky-700 underline decoration-sky-300 underline-offset-2 dark:text-comet"
-                      href={citation.ads_url}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      ADS Link
-                      <ExternalLink className="h-3.5 w-3.5" />
-                    </a>
-                  )}
+                <div className="flex gap-3">
+                  <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-sky-50 text-sky-700 ring-1 ring-sky-100 dark:bg-comet/10 dark:text-comet dark:ring-comet/20">
+                    <FileText className="h-4 w-4" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <h4 className="text-base font-semibold leading-6 text-slate-950 dark:text-white">
+                      {citation.title || 'Untitled paper'}
+                    </h4>
+                    <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                      {formatAuthors(citation.authors)}
+                    </p>
+                    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
+                      <span>{citation.year || 'Unknown year'}</span>
+                      {typeof citation.citation_count === 'number' && (
+                        <span>{formatNumber(citation.citation_count)} citations</span>
+                      )}
+                      {citation.doi && <span>DOI: {citation.doi}</span>}
+                    </div>
+                    {citation.ads_url && (
+                      <a
+                        className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-sky-700 underline decoration-sky-300 underline-offset-2 dark:text-comet"
+                        href={citation.ads_url}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        ADS Link
+                        <ExternalLink className="h-3.5 w-3.5" />
+                      </a>
+                    )}
+                  </div>
                 </div>
               </article>
             ))}
@@ -154,9 +124,48 @@ function ResearchRagPanel({ metadata }) {
         </div>
       )}
 
-      <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs leading-5 dark:border-white/10 dark:bg-white/[0.04]">
-        <p className="font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400">
-          Query Expansion Used: {queryExpansionUsed ? 'Yes' : 'No'}
+      <div className="mt-5">
+        <h3 className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
+          <Timer className="h-4 w-4" />
+          Research Metrics
+        </h3>
+        <div className="grid gap-2 text-xs sm:grid-cols-2 xl:grid-cols-4">
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-white/10 dark:bg-white/[0.035]">
+            <p className="font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-slate-500">
+              Papers Retrieved
+            </p>
+            <p className="mt-1 font-semibold text-slate-800 dark:text-slate-200">
+              {formatNumber(papersRetrieved)}
+              {papersUsed ? <span className="font-medium text-slate-500"> / {papersUsed} used</span> : null}
+            </p>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-white/10 dark:bg-white/[0.035]">
+            <p className="font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-slate-500">
+              Context Length
+            </p>
+            <p className="mt-1 font-semibold text-slate-800 dark:text-slate-200">
+              {formatNumber(contextLength)}
+            </p>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-white/10 dark:bg-white/[0.035]">
+            <p className="font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-slate-500">
+              Response Time
+            </p>
+            <p className="mt-1 font-semibold text-slate-800 dark:text-slate-200">
+              {formatNumber(responseTime)} ms
+            </p>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-white/10 dark:bg-white/[0.035]">
+            <p className="font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-slate-500">
+              Query Expansion Used
+            </p>
+            <p className="mt-1 font-semibold text-slate-800 dark:text-slate-200">
+              {queryExpansionUsed ? 'Yes' : 'No'}
+            </p>
+          </div>
+        </div>
+        <p className="mt-2 text-xs text-slate-500 dark:text-slate-500">
+          Mode: {researchMode}
         </p>
         {expandedQueries.length > 0 && (
           <div className="mt-2">
@@ -175,6 +184,7 @@ function ResearchRagPanel({ metadata }) {
 
 export default function MessageBubble({ message }) {
   const isUser = message.role === 'user'
+  const isResearchResponse = !isUser && message.rag_metadata?.mode === 'research_rag'
   const [copied, setCopied] = useState(false)
 
   async function copyMessage() {
@@ -184,7 +194,7 @@ export default function MessageBubble({ message }) {
   }
 
   return (
-    <article className={`flex gap-3 ${isUser ? 'justify-end' : 'justify-start'}`}>
+    <article className={`flex w-full gap-3 ${isUser ? 'justify-end' : 'justify-start'}`}>
       {!isUser && (
         <div className="mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-comet/25 to-aurora/20 text-sky-700 ring-1 ring-slate-200 dark:text-comet dark:ring-white/10">
           <Bot className="h-5 w-5" />
@@ -192,7 +202,9 @@ export default function MessageBubble({ message }) {
       )}
 
       <div
-        className={`group relative max-w-[min(760px,88%)] select-text rounded-3xl px-4 py-3 pr-12 text-sm leading-7 shadow-lg transition ${
+        className={`group relative min-w-0 select-text rounded-3xl px-4 py-3 pr-12 text-sm leading-7 shadow-lg transition sm:px-5 sm:py-4 ${
+          isUser ? 'max-w-[min(760px,88%)]' : 'w-full max-w-[1120px]'
+        } ${
           isUser
             ? 'bg-gradient-to-br from-comet to-aurora text-slate-950'
             : 'border border-slate-200 bg-white text-slate-900 dark:border-white/10 dark:bg-white/[0.06] dark:text-slate-100'
@@ -212,6 +224,11 @@ export default function MessageBubble({ message }) {
           {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
         </button>
 
+        {isResearchResponse && (
+          <h2 className="mb-3 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
+            Answer
+          </h2>
+        )}
         <MarkdownContent content={message.content} />
         {!isUser && <ResearchRagPanel metadata={message.rag_metadata} />}
 
