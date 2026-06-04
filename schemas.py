@@ -2,7 +2,7 @@ import re
 from datetime import datetime
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 
 def validate_bcrypt_password_size(value: str) -> str:
@@ -316,3 +316,85 @@ class RagQueryResponse(BaseModel):
     keyword_matches: int = 0
     merged_results: int = 0
     final_context_count: int = 0
+
+
+# ============================================================
+# Knowledge Library conversation persistence (dedicated store)
+# ============================================================
+
+
+class LibraryConversationListItem(BaseModel):
+    id: int
+    title: str
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class LibraryConversationMessageResponse(BaseModel):
+    id: int
+    conversation_id: int
+    role: Literal["user", "assistant"]
+    content: str
+    citations: list[RagCitation] = Field(default_factory=list)
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class LibraryConversationResponse(BaseModel):
+    id: int
+    user_id: int
+    title: str
+    document_id: Optional[int] = None
+    selected_document_id: Optional[int] = None
+    created_at: datetime
+    updated_at: datetime
+    messages: list[LibraryConversationMessageResponse] = Field(default_factory=list)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class LibraryConversationRenameRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=255)
+
+    @field_validator("title")
+    @classmethod
+    def clean_title(cls, value: str) -> str:
+        title = re.sub(r"\s+", " ", value).strip()
+        if not title:
+            raise ValueError("Conversation title cannot be empty.")
+        return title
+
+
+class LibraryAskRequest(BaseModel):
+    conversation_id: Optional[int] = Field(default=None, ge=1)
+    document_id: int = Field(
+        ...,
+        ge=1,
+        validation_alias=AliasChoices("document_id", "selected_document_id"),
+    )
+    question: str = Field(
+        ...,
+        min_length=1,
+        max_length=4000,
+        validation_alias=AliasChoices("question", "query"),
+    )
+    top_k: Optional[int] = Field(default=None, ge=1, le=20)
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    @field_validator("question")
+    @classmethod
+    def clean_question(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Question cannot be empty or whitespace only.")
+        return cleaned
+
+
+class LibraryAskResponse(BaseModel):
+    conversation_id: int
+    title: str
+    answer: str
+    citations: list[RagCitation] = Field(default_factory=list)

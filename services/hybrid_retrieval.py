@@ -111,13 +111,20 @@ def retrieve_hybrid(
     query: str,
     user_id: int,
     top_k: Optional[int] = None,
+    document_id: Optional[int] = None,
 ) -> HybridRetrievalResponse:
     start_time = time.perf_counter()
     cleaned_query = _validate_query(query)
     final_top_k = _validate_top_k(top_k or DEFAULT_TOP_K)
 
-    semantic_results = _semantic_retrieval(db, cleaned_query, user_id, final_top_k)
-    keyword_results = keyword_search(db, cleaned_query, user_id, limit=max(final_top_k * 3, final_top_k))
+    semantic_results = _semantic_retrieval(db, cleaned_query, user_id, final_top_k, document_id=document_id)
+    keyword_results = keyword_search(
+        db,
+        cleaned_query,
+        user_id,
+        limit=max(final_top_k * 3, final_top_k),
+        document_id=document_id,
+    )
     merged_results = merge_results(semantic_results, keyword_results)
     final_results = merged_results[:final_top_k]
 
@@ -132,16 +139,22 @@ def retrieve_hybrid(
     )
 
 
-def keyword_search(db: Session, query: str, user_id: int, limit: int = MAX_KEYWORD_CANDIDATES) -> list[HybridRetrievalResult]:
+def keyword_search(
+    db: Session,
+    query: str,
+    user_id: int,
+    limit: int = MAX_KEYWORD_CANDIDATES,
+    document_id: Optional[int] = None,
+) -> list[HybridRetrievalResult]:
     cleaned_query = _validate_query(query)
     terms = extract_keyword_terms(cleaned_query)
     safe_limit = max(1, min(limit, MAX_KEYWORD_CANDIDATES))
     candidates: dict[int, _KeywordCandidate] = {}
 
-    for candidate in _search_keywords_fts(db, cleaned_query, terms, user_id, safe_limit):
+    for candidate in _search_keywords_fts(db, cleaned_query, terms, user_id, safe_limit, document_id=document_id):
         _upsert_keyword_candidate(candidates, candidate)
 
-    for candidate in _search_keywords_like(db, cleaned_query, terms, user_id):
+    for candidate in _search_keywords_like(db, cleaned_query, terms, user_id, document_id=document_id):
         _upsert_keyword_candidate(candidates, candidate)
 
     print("QUERY:", cleaned_query)
@@ -228,18 +241,25 @@ def _semantic_retrieval(
     query: str,
     user_id: int,
     final_top_k: int,
+    document_id: Optional[int] = None,
 ) -> list[HybridRetrievalResult]:
     semantic_top_k = min(MAX_TOP_K, max(final_top_k, final_top_k * 2))
 
     try:
-        response = search_documents(db=db, query=query, user_id=user_id, top_k=semantic_top_k)
+        response = search_documents(
+            db=db,
+            query=query,
+            user_id=user_id,
+            top_k=semantic_top_k,
+            document_id=document_id,
+        )
     except SemanticSearchValidationError as exc:
         raise HybridRetrievalValidationError(str(exc)) from exc
     except SemanticSearchError:
         return []
 
     chunk_ids = [result.chunk_id for result in response.results if result.chunk_id > 0]
-    owned_chunks = _owned_chunk_rows(db, user_id, chunk_ids)
+    owned_chunks = _owned_chunk_rows(db, user_id, chunk_ids, document_id=document_id)
     semantic_results: list[HybridRetrievalResult] = []
 
     for result in response.results:
@@ -271,6 +291,7 @@ def _search_keywords_fts(
     terms: list[str],
     user_id: int,
     limit: int,
+    document_id: Optional[int] = None,
 ) -> list[_KeywordCandidate]:
     if not _is_sqlite(db) or not terms:
         return []
@@ -278,6 +299,11 @@ def _search_keywords_fts(
     fts_query = _build_fts_query(terms)
     if not fts_query:
         return []
+
+    document_filter = "AND document_id = :document_id" if document_id is not None else ""
+    params = {"query": fts_query, "user_id": int(user_id), "limit": int(limit)}
+    if document_id is not None:
+        params["document_id"] = int(document_id)
 
     try:
         _refresh_fts_table(db, user_id)
@@ -296,11 +322,12 @@ def _search_keywords_fts(
                     FROM {FTS_TABLE}
                     WHERE {FTS_TABLE} MATCH :query
                       AND user_id = :user_id
+                      {document_filter}
                     ORDER BY rank
                     LIMIT :limit
                     """
                 ),
-                {"query": fts_query, "user_id": int(user_id), "limit": int(limit)},
+                params,
             )
             .mappings()
             .all()
@@ -329,13 +356,17 @@ def _search_keywords_like(
     query: str,
     terms: list[str],
     user_id: int,
+    document_id: Optional[int] = None,
 ) -> list[_KeywordCandidate]:
-    rows = (
+    query_rows = (
         db.query(DocumentChunk, KnowledgeDocument)
         .join(KnowledgeDocument, DocumentChunk.document_id == KnowledgeDocument.id)
         .filter(KnowledgeDocument.user_id == int(user_id))
-        .all()
     )
+    if document_id is not None:
+        query_rows = query_rows.filter(KnowledgeDocument.id == int(document_id))
+
+    rows = query_rows.all()
 
     candidates: list[_KeywordCandidate] = []
     for chunk, document in rows:
@@ -453,19 +484,23 @@ def _owned_chunk_rows(
     db: Session,
     user_id: int,
     chunk_ids: list[int],
+    document_id: Optional[int] = None,
 ) -> dict[int, tuple[DocumentChunk, KnowledgeDocument]]:
     if not chunk_ids:
         return {}
 
-    rows = (
+    query = (
         db.query(DocumentChunk, KnowledgeDocument)
         .join(KnowledgeDocument, DocumentChunk.document_id == KnowledgeDocument.id)
         .filter(
             KnowledgeDocument.user_id == int(user_id),
             DocumentChunk.id.in_(list(dict.fromkeys(chunk_ids))),
         )
-        .all()
     )
+    if document_id is not None:
+        query = query.filter(KnowledgeDocument.id == int(document_id))
+
+    rows = query.all()
     return {chunk.id: (chunk, document) for chunk, document in rows}
 
 

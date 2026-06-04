@@ -29,11 +29,49 @@ function normalizeConversation(conversation) {
   }
 }
 
+function generateTitleFromQuery(query) {
+  // Remove common words and clean up the query
+  const stopWords = new Set([
+    'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by',
+    'from', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do',
+    'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might', 'can', 'what', 'how',
+    'why', 'when', 'where', 'who', 'which', 'this', 'that', 'these', 'those', 'i', 'you',
+    'he', 'she', 'it', 'we', 'they', 'me', 'him', 'her', 'us', 'them',
+  ])
+
+  const words = query
+    .toLowerCase()
+    .replace(/[^a-z\s]/g, '') // Remove punctuation
+    .split(/\s+/)
+    .filter((word) => word.length > 0 && !stopWords.has(word))
+    .slice(0, 6) // Take first 6 meaningful words
+
+  if (words.length === 0) return 'New chat'
+
+  // Capitalize first letter of each word
+  const title = words
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ')
+    .slice(0, 50) // Max 50 characters
+
+  return title || 'New chat'
+}
+
 function sortConversations(conversations) {
   return [...conversations].sort(
     (a, b) => new Date(b.updated_at || b.created_at) - new Date(a.updated_at || a.created_at),
   )
 }
+
+const researchModes = [
+  'Standard Research RAG',
+  'Comparison',
+  'Research Gap Analysis',
+  'Evidence Ranking',
+  'Contradiction Analysis',
+  'Report Generation',
+  'Literature Review',
+]
 
 export default function DashboardPage() {
   const { user } = useAuth()
@@ -307,6 +345,18 @@ export default function DashboardPage() {
         researchRag: researchRagMode,
       })
       const updatedConversation = normalizeConversation(data.conversation)
+      
+      // Auto-generate title from first message if using default title
+      if (updatedConversation.title === 'New chat' || !updatedConversation.title) {
+        const generatedTitle = generateTitleFromQuery(trimmedPrompt)
+        try {
+          await renameConversation(updatedConversation.id, generatedTitle)
+          updatedConversation.title = generatedTitle
+        } catch {
+          // If auto-rename fails, just keep going with the response title
+        }
+      }
+      
       replaceConversation(updatedConversation, { promote: true })
       setActiveConversationId(updatedConversation.id)
       localStorage.setItem(activeConversationKey, String(updatedConversation.id))
@@ -361,6 +411,19 @@ export default function DashboardPage() {
               <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600 dark:text-slate-400">
                 Ask about space biology, microgravity, lunar missions, radiation biology, and NASA research.
               </p>
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+                <span className="font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                  Mode:
+                </span>
+                {researchModes.map((mode) => (
+                  <span
+                    key={mode}
+                    className="rounded-full border border-slate-200 px-2.5 py-1 font-medium text-slate-600 dark:border-white/10 dark:text-slate-300"
+                  >
+                    {mode}
+                  </span>
+                ))}
+              </div>
             </div>
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
               <button
