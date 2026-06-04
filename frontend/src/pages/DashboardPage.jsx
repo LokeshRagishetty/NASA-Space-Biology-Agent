@@ -101,6 +101,15 @@ export default function DashboardPage() {
     () => conversations.find((conversation) => conversation.id === activeConversationId) || null,
     [activeConversationId, conversations],
   )
+  const activeResearchMode = useMemo(() => {
+    if (!researchRagMode) return null
+
+    const lastResearchMessage = [...messages]
+      .reverse()
+      .find((message) => message.role === 'assistant' && message.rag_metadata?.mode === 'research_rag')
+
+    return lastResearchMessage?.rag_metadata?.research_mode || 'Standard Research RAG'
+  }, [messages, researchRagMode])
 
   useAutoResizeTextarea(textareaRef, question)
 
@@ -397,7 +406,7 @@ export default function DashboardPage() {
 
   return (
     <PageTransition className="flex min-h-0 flex-1 flex-col overflow-hidden">
-      <div className="mx-auto flex h-full w-full max-w-5xl flex-1 flex-col px-4 py-5 sm:px-6 lg:px-8">
+      <div className="mx-auto flex h-full w-full max-w-[1480px] flex-1 flex-col px-4 py-5 sm:px-6 lg:px-8">
         <section className="mb-4 rounded-3xl border border-slate-200 bg-white p-4 shadow-sm transition dark:border-white/10 dark:bg-white/[0.05] dark:shadow-glow dark:backdrop-blur-xl sm:p-5">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0">
@@ -418,7 +427,11 @@ export default function DashboardPage() {
                 {researchModes.map((mode) => (
                   <span
                     key={mode}
-                    className="rounded-full border border-slate-200 px-2.5 py-1 font-medium text-slate-600 dark:border-white/10 dark:text-slate-300"
+                    className={`rounded-full border px-2.5 py-1 font-medium transition ${
+                      activeResearchMode === mode
+                        ? 'border-sky-300 bg-sky-50 text-sky-900 shadow-[0_0_18px_rgba(14,165,233,0.18)] ring-1 ring-sky-200/70 dark:border-comet/60 dark:bg-comet/15 dark:text-comet dark:shadow-[0_0_22px_rgba(120,231,255,0.22)] dark:ring-comet/30'
+                        : 'border-slate-200 text-slate-600 dark:border-white/10 dark:text-slate-400'
+                    }`}
                   >
                     {mode}
                   </span>

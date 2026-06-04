@@ -25,6 +25,7 @@ from services.research_rag_service import (
     ResearchRagResponse,
     answer_query_with_research_rag,
     build_research_context,
+    format_study_label,
     retrieve_nasa_ads_papers_with_metadata,
 )
 
@@ -88,6 +89,7 @@ class ResearchIntelligenceResponse:
 @dataclass(frozen=True)
 class EvidenceScore:
     paper_index: int
+    source_label: str
     title: str
     score: int
     confidence: str
@@ -100,6 +102,8 @@ COMPARISON_PROMPT = PromptTemplate.from_template(
 Use ONLY the supplied NASA ADS papers. Compare the retrieved papers together.
 Do not use outside knowledge. Do not fabricate citations, methods, samples, or contradictions.
 If a category cannot be supported by the abstracts, say so explicitly.
+Never refer to sources using generic numbered paper labels.
+Use paper titles, first author + year, or concise shortened titles.
 
 Required output format:
 
@@ -136,6 +140,8 @@ RESEARCH_GAP_PROMPT = PromptTemplate.from_template(
 Analyze ALL retrieved NASA ADS abstracts and identify gaps only when they are grounded in the supplied papers.
 Use ONLY the supplied papers. Do not use outside knowledge. Do not invent missing work.
 If the abstracts do not establish a gap, state that the retrieved abstracts do not provide enough evidence for that gap.
+Never refer to sources using generic numbered paper labels.
+Use paper titles, first author + year, or concise shortened titles.
 
 Required output format:
 
@@ -163,6 +169,8 @@ EVIDENCE_PROMPT = PromptTemplate.from_template(
 Rank the retrieved studies by evidence strength using ONLY the supplied NASA ADS abstracts and evidence signals.
 Evidence scoring is based on citation count when available, review article indicators, sample size references,
 experimental detail, and recency. Do not claim reliability details absent from the abstracts or evidence signals.
+Never refer to sources using generic numbered paper labels.
+Use paper titles, first author + year, or concise shortened titles.
 
 Required output format:
 
@@ -196,6 +204,8 @@ CONTRADICTION_PROMPT = PromptTemplate.from_template(
 Analyze the retrieved NASA ADS papers for agreements and contradictions.
 Use ONLY the supplied abstracts. Do not invent contradictions.
 If no direct contradiction is present in the abstracts, state that no direct contradiction was detected.
+Never refer to sources using generic numbered paper labels.
+Use paper titles, first author + year, or concise shortened titles.
 
 Required output format:
 
@@ -223,6 +233,8 @@ REPORT_PROMPT = PromptTemplate.from_template(
 Generate an export-ready markdown research report using ONLY the supplied NASA ADS papers.
 Do not use outside knowledge. Keep every claim grounded in the retrieved abstracts.
 Use the provided reference list only.
+Never refer to sources using generic numbered paper labels.
+Use paper titles, first author + year, or concise shortened titles.
 
 Required markdown structure:
 
@@ -262,6 +274,8 @@ REVIEW_PROMPT = PromptTemplate.from_template(
 Generate an export-ready markdown literature review using ONLY the supplied NASA ADS papers.
 Do not use outside knowledge. Keep every claim grounded in the retrieved abstracts.
 Use the provided reference list only.
+Never refer to sources using generic numbered paper labels.
+Use paper titles, first author + year, or concise shortened titles.
 
 Required markdown structure:
 
@@ -640,7 +654,8 @@ def format_evidence_signals(papers: list[ResearchPaper]) -> str:
         lines.append(
             "\n".join(
                 [
-                    f"[Paper {score.paper_index}] {score.title}",
+                    f"Study: {score.source_label}",
+                    f"Title: {score.title}",
                     f"Computed evidence score: {score.score}/100",
                     f"Computed confidence: {score.confidence}",
                     "Scoring reasons:",
@@ -678,6 +693,7 @@ def score_evidence(paper: ResearchPaper, paper_index: int) -> EvidenceScore:
     bounded_score = min(score, 100)
     return EvidenceScore(
         paper_index=paper_index,
+        source_label=format_study_label(paper),
         title=paper.title,
         score=bounded_score,
         confidence=confidence_label(bounded_score),

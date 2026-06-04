@@ -132,6 +132,28 @@ reply exactly:
 Do not invent facts.
 Do not use outside knowledge.
 Do not fabricate citations.
+Never refer to sources using generic numbered paper labels.
+Refer to studies by the supplied source label, the actual paper title, first author + year,
+or a concise shortened title when the full title is too long.
+
+Required markdown format:
+
+## Summary
+Briefly answer the question.
+
+## Key Findings
+- Finding grounded in the retrieved papers.
+- Finding grounded in the retrieved papers.
+
+## Evidence
+- Name the relevant study and summarize the evidence from its abstract.
+- Name the relevant study and summarize the evidence from its abstract.
+
+## Limitations
+- State limits of the retrieved abstracts or missing evidence.
+
+## Conclusion
+One concise synthesis grounded in the supplied papers.
 
 Context:
 {context}
@@ -340,7 +362,7 @@ def build_research_context(
         if not abstract:
             continue
 
-        block_prefix = format_paper_context_prefix(len(context_blocks) + 1, paper)
+        block_prefix = format_paper_context_prefix(paper)
         available = max_characters - used_characters - len(block_prefix)
         if available <= 0:
             break
@@ -365,14 +387,14 @@ def build_research_context(
     )
 
 
-def format_paper_context_prefix(index: int, paper: ResearchPaper) -> str:
+def format_paper_context_prefix(paper: ResearchPaper) -> str:
     authors = ", ".join(paper.authors) if paper.authors else "Unknown"
     year = paper.year if paper.year is not None else "Unknown"
     doi = paper.doi or "Not listed"
     citation_count = paper.citation_count if paper.citation_count is not None else "Not available"
 
     return (
-        f"[Paper {index}]\n\n"
+        f"Source: {format_study_label(paper)}\n\n"
         f"Title: {paper.title}\n"
         f"Authors: {authors}\n"
         f"Year: {year}\n"
@@ -380,6 +402,45 @@ def format_paper_context_prefix(index: int, paper: ResearchPaper) -> str:
         f"Citation Count: {citation_count}\n"
         "Abstract: "
     )
+
+
+def format_study_label(paper: ResearchPaper) -> str:
+    author_label = format_first_author_label(paper.authors)
+    year = paper.year
+    if author_label and year is not None:
+        return f"{author_label} ({year})"
+    if author_label:
+        return author_label
+    if year is not None:
+        return f"{shorten_title(paper.title)} ({year})"
+    return shorten_title(paper.title)
+
+
+def format_first_author_label(authors: list[str]) -> str:
+    if not authors:
+        return ""
+
+    first_author = authors[0].strip()
+    if not first_author:
+        return ""
+
+    if "," in first_author:
+        surname = first_author.split(",", 1)[0].strip()
+    else:
+        surname = first_author.split()[-1].strip()
+
+    if not surname:
+        return ""
+    return f"{surname} et al." if len(authors) > 1 else surname
+
+
+def shorten_title(title: str, max_length: int = 80) -> str:
+    cleaned = re.sub(r"\s+", " ", title or "").strip()
+    if not cleaned:
+        return "Untitled NASA ADS study"
+    if len(cleaned) <= max_length:
+        return cleaned
+    return cleaned[: max_length - 3].rstrip(" .,:;") + "..."
 
 
 def citation_for_paper(paper: ResearchPaper) -> ResearchCitation:
