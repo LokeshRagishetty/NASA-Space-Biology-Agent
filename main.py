@@ -560,7 +560,8 @@ def get_or_create_google_user(db: Session, claims: dict) -> User:
     user = User(
         username=get_unique_username(db, normalize_google_username(name, email)),
         email=email,
-        hashed_password=get_password_hash(secrets.token_urlsafe(48)),
+        random_password = secrets.token_hex(24)
+        hashed_password = get_password_hash(random_password),
         google_id=firebase_uid,
         avatar_url=picture,
         auth_provider="google",
