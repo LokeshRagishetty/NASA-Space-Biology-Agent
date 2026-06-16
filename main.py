@@ -1419,9 +1419,20 @@ def preview_knowledge_document(
     db: Session = Depends(get_db),
 ):
     document = get_user_document(db, current_user, document_id)
+
+    logging.info(f"DOCUMENT ID: {document.id}")
+    logging.info(f"STORAGE PATH: {document.storage_path}")
+
     path = Path(document.storage_path)
+
+    logging.info(f"PATH EXISTS: {path.exists()}")
+    logging.info(f"IS FILE: {path.is_file()}")
+
     if not path.exists() or not path.is_file():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Stored file not found.")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Stored file not found."
+        )
 
     return FileResponse(
         path,
